@@ -31,6 +31,26 @@
 			<locationURI>FREERTOS_ROOT/FreeRTOS/Source</locationURI>
 		</link>
 		<link>
+			<name>mcp2515.c</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/Users/FAF02/ti/workspace_v12/mcp2515-master/msp430/mcp2515.c</locationURI>
+		</link>
+		<link>
+			<name>mcp2515.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/Users/FAF02/ti/workspace_v12/mcp2515-master/msp430/mcp2515.h</locationURI>
+		</link>
+		<link>
+			<name>msp430_spi.c</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/Users/FAF02/ti/workspace_v12/mcp2515-master/msp430/msp430_spi.c</locationURI>
+		</link>
+		<link>
+			<name>msp430_spi.h</name>
+			<type>1</type>
+			<locationURI>PARENT-4-PROJECT_LOC/Users/FAF02/ti/workspace_v12/mcp2515-master/msp430/msp430_spi.h</locationURI>
+		</link>
+		<link>
 			<name>Full_Demo/FreeRTOS+CLI</name>
 			<type>2</type>
 			<locationURI>FREERTOS_ROOT/FreeRTOS-Plus/Source/FreeRTOS-Plus-CLI</locationURI>
@@ -58,7 +78,7 @@
 	</linkedResources>
 	<filteredResources>
 		<filter>
-			<id>1430137400309</id>
+			<id>1674790927897</id>
 			<name></name>
 			<type>10</type>
 			<matcher>

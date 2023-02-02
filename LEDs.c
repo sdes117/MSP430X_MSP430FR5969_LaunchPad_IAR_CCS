@@ -41,9 +41,9 @@
 #include "driverlib.h"
 
 /* Port/pin definitions. */
-#define partstNUM_LEDS	2
-const uint8_t ucPorts[ partstNUM_LEDS ] = { GPIO_PORT_P1, GPIO_PORT_P4 };
-const uint16_t usPins[ partstNUM_LEDS ] = { GPIO_PIN0, GPIO_PIN6 };
+#define partstNUM_LEDS	1
+const uint8_t ucPorts[ partstNUM_LEDS ] = { GPIO_PORT_P2 };
+const uint16_t usPins[ partstNUM_LEDS ] = { GPIO_PIN7 };
 
 /*-----------------------------------------------------------*/
 

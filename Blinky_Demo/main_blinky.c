@@ -70,13 +70,22 @@
 /* Standard demo includes. */
 #include "partest.h"
 
+/* TI includes. */
+#include "driverlib.h"
+
+/* CAN includes */
+#include <msp430.h>
+#include "mcp2515.h"
+
+#include "mission.h"
+
 /* Priorities at which the tasks are created. */
 #define mainQUEUE_RECEIVE_TASK_PRIORITY		( tskIDLE_PRIORITY + 2 )
 #define	mainQUEUE_SEND_TASK_PRIORITY		( tskIDLE_PRIORITY + 1 )
 
 /* The rate at which data is sent to the queue.  The 200ms value is converted
 to ticks using the portTICK_PERIOD_MS constant. */
-#define mainQUEUE_SEND_FREQUENCY_MS			( pdMS_TO_TICKS( 200 ) )
+#define mainQUEUE_SEND_FREQUENCY_MS			( pdMS_TO_TICKS( 1000 ) )
 
 /* The number of items the queue can hold.  This is 1 as the receive task
 will remove items as they are added, meaning the send task should always find
@@ -105,12 +114,20 @@ static void prvQueueSendTask( void *pvParameters );
 /* The queue used by both tasks. */
 static QueueHandle_t xQueue = NULL;
 
+uint16_t ADCResult = 0;
+uint16_t CANflag = 0;
+
+uint32_t rid;
+uint8_t mext;
+uint8_t irq, buf[8]; //, buf2[16];
+
 /*-----------------------------------------------------------*/
 
 void main_blinky( void )
 {
 	/* Create the queue. */
-	xQueue = xQueueCreate( mainQUEUE_LENGTH, sizeof( uint32_t ) );
+    //xQueue = xQueueCreate( mainQUEUE_LENGTH, sizeof( uint32_t ) );
+    xQueue = xQueueCreate( mainQUEUE_LENGTH, sizeof( uint16_t ) );
 
 	if( xQueue != NULL )
 	{
@@ -142,7 +159,7 @@ void main_blinky( void )
 static void prvQueueSendTask( void *pvParameters )
 {
 TickType_t xNextWakeTime;
-const unsigned long ulValueToSend = 100UL;
+//const unsigned long ulValueToSend = 100UL;
 
 	/* Remove compiler warning about unused parameter. */
 	( void ) pvParameters;
@@ -159,15 +176,20 @@ const unsigned long ulValueToSend = 100UL;
 		toggle the LED.  0 is used as the block time so the sending operation
 		will not block - it shouldn't need to block as the queue should always
 		be empty at this point in the code. */
-		xQueueSend( xQueue, &ulValueToSend, 0U );
+		//xQueueSend( xQueue, &ulValueToSend, 0U );
+        //Enable and Start the conversion
+        //in Single-Channel, Single Conversion Mode
+        ADC10_B_startConversion(ADC10_B_BASE,
+            ADC10_B_SINGLECHANNEL);
+
 	}
 }
 /*-----------------------------------------------------------*/
 
 static void prvQueueReceiveTask( void *pvParameters )
 {
-unsigned long ulReceivedValue;
-const unsigned long ulExpectedValue = 100UL;
+uint16_t uReceivedValue;
+//const unsigned long ulExpectedValue = 100UL;
 
 	/* Remove compiler warning about unused parameter. */
 	( void ) pvParameters;
@@ -177,16 +199,202 @@ const unsigned long ulExpectedValue = 100UL;
 		/* Wait until something arrives in the queue - this task will block
 		indefinitely provided INCLUDE_vTaskSuspend is set to 1 in
 		FreeRTOSConfig.h. */
-		xQueueReceive( xQueue, &ulReceivedValue, portMAX_DELAY );
+		xQueueReceive( xQueue, &uReceivedValue, portMAX_DELAY );
 
 		/*  To get here something must have been received from the queue, but
 		is it the expected value?  If it is, toggle the LED. */
-		if( ulReceivedValue == ulExpectedValue )
+		if( uReceivedValue )
 		{
-			vParTestToggleLED( mainTASK_LED );
-			ulReceivedValue = 0U;
+		    vParTestToggleLED( mainTASK_LED );
+			uReceivedValue = 0U;
 		}
+
+		if (mcp2515_irq & MCP2515_IRQ_FLAGGED) {
+            int i;
+            irq = can_irq_handler();
+            if (irq & MCP2515_IRQ_RX && !(irq & MCP2515_IRQ_ERROR)) {
+                i = can_recv(&rid, &mext, buf);
+                if (i > 0) {
+                    if (mext) {
+                        /* TODO: replace the following with CSP CAN packet handling when we have room */
+                        /* decode the CSP packet */
+                        uint32_t src, dest;
+                        uint16_t pri, sp, dp;
+
+                        src  = (rid & 0x1F000000) >> 24;
+                        dest = (rid & 0x00F80000) >> 19;
+                        pri  = (buf[0] & 0xc0) >> 6;
+                        dp   = (buf[1] & 0xf) << 2 | (buf[2] & 0xc0) >> 6;
+                        sp   = (buf[2] & 0x3f);
+
+                        if ((i == 6) && (dest == CSP_ID) && (dp == 1)) {
+
+                            /* ping request - send response (note this only responds to a ping of payload size zero) */
+                            buf[0] = pri << 6 | dest << 1 | (src & 0x10) >> 4;
+                            buf[1] = (src & 0xf) << 4 | sp >> 2;
+                            buf[2] = (sp & 0x3) << 6 | dp;
+
+                            can_send(((dest<<24) |(src<<19)), 1, buf, i, 3);
+                        }
+                    }
+                }
+            } else if (irq & MCP2515_IRQ_ERROR) {
+                can_r_reg(MCP2515_CANINTF, &mext, 1);
+                can_r_reg(MCP2515_EFLG, &mext, 1);
+                // TODO  -assert?
+
+                /*
+                while(1) {
+                    P1OUT |= BIT0;
+                    __delay_cycles(1600000);
+                    P1OUT &= ~BIT0;
+                    __delay_cycles(1600000);
+                }
+                */
+            }
+        }
+
+        if ( !(mcp2515_irq & MCP2515_IRQ_FLAGGED) ) {
+            //P1OUT ^= BIT0;
+            // TODO: LPM3;
+        }
 	}
 }
 /*-----------------------------------------------------------*/
+
+
+/**********************************************************************//**
+ * @brief  ADC10 ISR
+ *
+ * @param  none
+ *
+ * @return none
+ *************************************************************************/
+#pragma vector=ADC10_VECTOR
+__interrupt void ADC10_ISR(void)
+{
+  switch(__even_in_range(ADC10IV,ADC10IV_ADC10IFG))
+  {
+    case ADC10IV_NONE: break;               // No interrupt
+    case ADC10IV_ADC10OVIFG: break;         // conversion result overflow
+    case ADC10IV_ADC10TOVIFG: break;        // conversion time overflow
+    case ADC10IV_ADC10HIIFG: break;         // ADC10HI
+    case ADC10IV_ADC10LOIFG: break;         // ADC10LO
+    case ADC10IV_ADC10INIFG: break;         // ADC10IN
+    case ADC10IV_ADC10IFG:
+             ADCResult = ADC10_B_getResults(ADC10_B_BASE);
+             // now post result to xQueue
+             xQueueSend( xQueue, &ADCResult, 0U );
+
+             __bic_SR_register_on_exit(CPUOFF);  //required?
+             break;                          // Clear CPUOFF bit from 0(SR)
+    default: break;
+  }
+}
+
+
+// ISR for PORT2
+#pragma vector=PORT2_VECTOR
+__interrupt void P2_ISR(void)
+{
+    if (P2IFG & CAN_IRQ_PORTBIT) {
+        P2IFG &= ~CAN_IRQ_PORTBIT;
+        mcp2515_irq |= MCP2515_IRQ_FLAGGED;
+
+        xQueueSend( xQueue, &CANflag, 0U );
+        //__bic_SR_register_on_exit(LPM3_bits);
+        __bic_SR_register_on_exit(CPUOFF);
+    }
+}
+
+
+#if 0
+#include <msp430.h>
+#include "mcp2515.h"
+
+uint32_t rid;
+uint8_t mext;
+uint8_t irq, buf[8], buf2[16];
+volatile int i;
+#define SLEEP_COUNTER 20
+
+int main()
+{
+    WDTCTL = WDTPW | WDTHOLD;
+    DCOCTL = CALDCO_16MHZ;
+    BCSCTL1 = CALBC1_16MHZ;
+    BCSCTL2 = DIVS_1;
+    BCSCTL3 = LFXT1S_2;
+    while (BCSCTL3 & LFXT1OF)
+        ;
+
+    P1DIR |= BIT0;
+    P1OUT &= ~BIT0;
+
+    can_init();
+    if (can_speed(500000, 1, 1) < 0) {
+        P1OUT |= BIT0;
+        LPM4;
+    }
+
+    can_rx_setmask(0, 0xFFFFFF4F, 1);
+    can_rx_setfilter(0, 0, 0x00000040);
+    can_rx_setfilter(0, 1, 0x0000000F);
+
+    can_rx_setmask(1, 0xFFFFFF0F, 1);
+    can_rx_setfilter(1, 0, 0x00000000);
+    can_rx_setfilter(1, 1, 0x00000000);
+    can_rx_setfilter(1, 2, 0x00000000);
+    can_rx_setfilter(1, 3, 0x00000000);
+
+    can_rx_mode(0, MCP2515_RXB0CTRL_MODE_RECV_STD_OR_EXT);
+
+    can_ioctl(MCP2515_OPTION_LOOPBACK, 0);
+    can_ioctl(MCP2515_OPTION_ONESHOT, 1);
+
+    for (i=0; i < 16; i++)
+        can_r_reg(i * 16, buf2, 16);
+
+    while(1) {
+        if (mcp2515_irq & MCP2515_IRQ_FLAGGED) {
+            irq = can_irq_handler();
+            if (irq & MCP2515_IRQ_RX && !(irq & MCP2515_IRQ_ERROR)) {
+                i = can_recv(&rid, &mext, buf);
+                if (i > 0) {
+                    if (mext && rid == 0x00000080) {
+                        can_send(0x00000040, 1, buf, 2, 3);
+                    }
+                }
+            } else if (irq & MCP2515_IRQ_ERROR) {
+                can_r_reg(MCP2515_CANINTF, &mext, 1);
+                can_r_reg(MCP2515_EFLG, &mext, 1);
+                while(1) {
+                    P1OUT |= BIT0;
+                    __delay_cycles(1600000);
+                    P1OUT &= ~BIT0;
+                    __delay_cycles(1600000);
+                }
+            }
+        }
+
+        if ( !(mcp2515_irq & MCP2515_IRQ_FLAGGED) ) {
+            //P1OUT ^= BIT0;
+            LPM3;
+        }
+    }
+    return 0;
+}
+
+// ISR for PORT1
+#pragma vector=PORT1_VECTOR
+__interrupt void P1_ISR(void)
+{
+    if (P1IFG & CAN_IRQ_PORTBIT) {
+        P1IFG &= ~CAN_IRQ_PORTBIT;
+        mcp2515_irq |= MCP2515_IRQ_FLAGGED;
+        __bic_SR_register_on_exit(LPM3_bits);
+    }
+}
+
+#endif
 
