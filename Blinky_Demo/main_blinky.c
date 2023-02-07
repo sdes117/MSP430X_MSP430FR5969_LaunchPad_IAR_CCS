@@ -284,7 +284,7 @@ __interrupt void ADC10_ISR(void)
     case ADC10IV_ADC10IFG:
              ADCResult = ADC10_B_getResults(ADC10_B_BASE);
              // now post result to xQueue
-             xQueueSend( xQueue, &ADCResult, 0U );
+             xQueueSendFromISR( xQueue, &ADCResult, 0U );
 
              __bic_SR_register_on_exit(CPUOFF);  //required?
              break;                          // Clear CPUOFF bit from 0(SR)
@@ -301,7 +301,7 @@ __interrupt void P2_ISR(void)
         P2IFG &= ~CAN_IRQ_PORTBIT;
         mcp2515_irq |= MCP2515_IRQ_FLAGGED;
 
-        xQueueSend( xQueue, &CANflag, 0U );
+        xQueueSendFromISR( xQueue, &CANflag, 0U );
         //__bic_SR_register_on_exit(LPM3_bits);
         __bic_SR_register_on_exit(CPUOFF);
     }
