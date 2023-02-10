@@ -297,11 +297,11 @@ static void prvSetupHardware( void )
     /*
      * Base Address for the ADC10B Module
      * Sample/hold for 16 clock cycles
-     * Do not enable Multiple Sampling
+     * Enable Multiple Sampling
      */
     ADC10_B_setupSamplingTimer(ADC10_B_BASE,
-        ADC10_B_CYCLEHOLD_16_CYCLES,
-        ADC10_B_MULTIPLESAMPLESDISABLE);
+        ADC10_B_CYCLEHOLD_256_CYCLES,
+        ADC10_B_MULTIPLESAMPLESENABLE);
 
     //Configure the Memory Buffer
     /*
@@ -311,7 +311,7 @@ static void prvSetupHardware( void )
      * Use negative reference of AVss
      */
     ADC10_B_configureMemory(ADC10_B_BASE,
-        ADC10_B_INPUT_A4,
+        ADC10_B_INPUT_A15,
         //ADC10_B_INPUT_A12,
         ADC10_B_VREFPOS_AVCC,
         ADC10_B_VREFNEG_AVSS);

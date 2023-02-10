@@ -85,17 +85,31 @@
 
 /* The rate at which data is sent to the queue.  The 200ms value is converted
 to ticks using the portTICK_PERIOD_MS constant. */
-#define mainQUEUE_SEND_FREQUENCY_MS			( pdMS_TO_TICKS( 1000 ) )
+#define mainQUEUE_SEND_FREQUENCY_MS			( pdMS_TO_TICKS( 500 ) )
 
 /* The number of items the queue can hold.  This is 1 as the receive task
 will remove items as they are added, meaning the send task should always find
 the queue empty. */
-#define mainQUEUE_LENGTH					( 1 )
+#define mainQUEUE_LENGTH					( 16 )
 
 /* The LED toggled by the Rx task. */
 #define mainTASK_LED						( 0 )
 
 /*-----------------------------------------------------------*/
+
+typedef enum
+{
+    eTimer = 0,
+    eCAN   = 1,
+    eADC   = 2
+}eMsgType;
+
+struct AppMessage
+{
+    uint8_t  msgID;
+    uint8_t  msgByte;
+    void    *pvData;
+};
 
 /*
  * Called by main when mainCREATE_SIMPLE_BLINKY_DEMO_ONLY is set to 1 in
@@ -109,17 +123,22 @@ void main_blinky( void );
 static void prvQueueReceiveTask( void *pvParameters );
 static void prvQueueSendTask( void *pvParameters );
 
+uint8_t ADC10_B_getConvertedChannel (uint16_t baseAddress);
+
 /*-----------------------------------------------------------*/
 
 /* The queue used by both tasks. */
 static QueueHandle_t xQueue = NULL;
 
-uint16_t ADCResult = 0;
-uint16_t CANflag = 0;
+struct AppMessage ADCResult = {0};
+struct AppMessage CANflag = {0};
 
 uint32_t rid;
 uint8_t mext;
 uint8_t irq, buf[8]; //, buf2[16];
+uint16_t ADCdata[16];
+uint32_t ADCtime;
+
 
 /*-----------------------------------------------------------*/
 
@@ -127,7 +146,7 @@ void main_blinky( void )
 {
 	/* Create the queue. */
     //xQueue = xQueueCreate( mainQUEUE_LENGTH, sizeof( uint32_t ) );
-    xQueue = xQueueCreate( mainQUEUE_LENGTH, sizeof( uint16_t ) );
+    xQueue = xQueueCreate( mainQUEUE_LENGTH, sizeof( struct AppMessage ) );
 
 	if( xQueue != NULL )
 	{
@@ -160,6 +179,7 @@ static void prvQueueSendTask( void *pvParameters )
 {
 TickType_t xNextWakeTime;
 //const unsigned long ulValueToSend = 100UL;
+struct AppMessage msg;
 
 	/* Remove compiler warning about unused parameter. */
 	( void ) pvParameters;
@@ -176,11 +196,17 @@ TickType_t xNextWakeTime;
 		toggle the LED.  0 is used as the block time so the sending operation
 		will not block - it shouldn't need to block as the queue should always
 		be empty at this point in the code. */
-		//xQueueSend( xQueue, &ulValueToSend, 0U );
-        //Enable and Start the conversion
-        //in Single-Channel, Single Conversion Mode
-        ADC10_B_startConversion(ADC10_B_BASE,
-            ADC10_B_SINGLECHANNEL);
+		msg.msgID = eTimer;
+		msg.pvData = (void *)xNextWakeTime; /* nb: store 16-bit value, not pointer */
+		xQueueSend( xQueue, &msg, 0U );
+
+        if(msg.msgByte++ >= 30)
+        {
+            msg.msgByte = 0;
+		    //Enable and Start the conversion
+            //in Sequence-of-Channel, Single Conversion Mode
+            ADC10_B_startConversion(ADC10_B_BASE, ADC10_B_SEQOFCHANNELS);
+        }
 
 	}
 }
@@ -188,7 +214,7 @@ TickType_t xNextWakeTime;
 
 static void prvQueueReceiveTask( void *pvParameters )
 {
-uint16_t uReceivedValue;
+    struct AppMessage msg;
 //const unsigned long ulExpectedValue = 100UL;
 
 	/* Remove compiler warning about unused parameter. */
@@ -199,15 +225,28 @@ uint16_t uReceivedValue;
 		/* Wait until something arrives in the queue - this task will block
 		indefinitely provided INCLUDE_vTaskSuspend is set to 1 in
 		FreeRTOSConfig.h. */
-		xQueueReceive( xQueue, &uReceivedValue, portMAX_DELAY );
+		xQueueReceive( xQueue, &msg, portMAX_DELAY );
 
 		/*  To get here something must have been received from the queue, but
 		is it the expected value?  If it is, toggle the LED. */
-		if( uReceivedValue )
-		{
-		    vParTestToggleLED( mainTASK_LED );
-			uReceivedValue = 0U;
-		}
+        if( msg.msgID == eTimer )
+        {
+            vParTestToggleLED( mainTASK_LED );
+            ADCtime = (uint16_t)msg.pvData;
+        }
+
+        if( msg.msgID == eADC )
+        {
+            /* Store the data */
+            ADCdata[(msg.msgByte+1) & 0xF] = (uint16_t)msg.pvData;
+            /* If it's the last channel, transmit the data */
+            if(msg.msgByte == 15)
+            {
+                /* transmit ADCtime, followed by ADCdata */
+                msg.msgID++;
+
+            }
+        }
 
 		if (mcp2515_irq & MCP2515_IRQ_FLAGGED) {
             int i;
@@ -262,6 +301,11 @@ uint16_t uReceivedValue;
 }
 /*-----------------------------------------------------------*/
 
+uint8_t ADC10_B_getConvertedChannel (uint16_t baseAddress)
+{
+    return ( HWREG8(baseAddress + OFS_ADC10MCTL0) & 0x0F );
+}
+
 
 /**********************************************************************//**
  * @brief  ADC10 ISR
@@ -273,6 +317,7 @@ uint16_t uReceivedValue;
 #pragma vector=ADC10_VECTOR
 __interrupt void ADC10_ISR(void)
 {
+
   switch(__even_in_range(ADC10IV,ADC10IV_ADC10IFG))
   {
     case ADC10IV_NONE: break;               // No interrupt
@@ -282,12 +327,14 @@ __interrupt void ADC10_ISR(void)
     case ADC10IV_ADC10LOIFG: break;         // ADC10LO
     case ADC10IV_ADC10INIFG: break;         // ADC10IN
     case ADC10IV_ADC10IFG:
-             ADCResult = ADC10_B_getResults(ADC10_B_BASE);
-             // now post result to xQueue
-             xQueueSendFromISR( xQueue, &ADCResult, 0U );
+        ADCResult.msgID = eADC;
+        ADCResult.msgByte = ADC10_B_getConvertedChannel (ADC10_B_BASE);
+        ADCResult.pvData = (void *)ADC10_B_getResults(ADC10_B_BASE);
+        // now post result to xQueue
+        xQueueSendFromISR( xQueue, &ADCResult, 0U );
 
-             __bic_SR_register_on_exit(CPUOFF);  //required?
-             break;                          // Clear CPUOFF bit from 0(SR)
+        __bic_SR_register_on_exit(CPUOFF);  //required?
+        break;                          // Clear CPUOFF bit from 0(SR)
     default: break;
   }
 }
