@@ -9,7 +9,7 @@
 
 #include "inc/hw_memmap.h"
 
-#ifdef __MSP430_HAS_FRAM_FR5XX__
+#ifdef __MSP430_HAS_FRAM__
 
 //*****************************************************************************
 //
@@ -29,10 +29,8 @@ extern "C"
 //
 //*****************************************************************************
 #define FRAMCTL_PUC_ON_UNCORRECTABLE_BIT                               UBDRSTEN
-#define FRAMCTL_UNCORRECTABLE_BIT_INTERRUPT                              UBDIEN
-#define FRAMCTL_CORRECTABLE_BIT_INTERRUPT                                CBDIEN
-#define FRAMCTL_ACCESS_VIOLATION_INTERRUPT                               ACCVIE
-#define FRAMCTL_ACCESS_TIME_ERROR_INTERRUPT                             ACCTEIE
+#define FRAMCTL_UNCORRECTABLE_BIT_INTERRUPT                               UBDIE
+#define FRAMCTL_CORRECTABLE_BIT_INTERRUPT                                 CBDIE
 
 //*****************************************************************************
 //
@@ -44,46 +42,30 @@ extern "C"
 #define FRAMCTL_ACCESS_TIME_ERROR_FLAG                                 ACCTEIFG
 #define FRAMCTL_UNCORRECTABLE_BIT_FLAG                                   UBDIFG
 #define FRAMCTL_CORRECTABLE_BIT_FLAG                                     CBDIFG
-#define FRAMCTL_ACCESS_VIOLATION_FLAG                                   ACCVIFG
 
 //*****************************************************************************
 //
-// The following are values that can be passed to the accessTime parameter for
+// The following are values that can be passed to the waitState parameter for
 // functions: FRAMCtl_configureWaitStateControl().
 //
 //*****************************************************************************
-#define FRAMCTL_ACCESS_TIME_CYCLES_0                                  NACCESS_0
-#define FRAMCTL_ACCESS_TIME_CYCLES_1                                  NACCESS_1
-#define FRAMCTL_ACCESS_TIME_CYCLES_2                                  NACCESS_2
-#define FRAMCTL_ACCESS_TIME_CYCLES_3                                  NACCESS_3
-#define FRAMCTL_ACCESS_TIME_CYCLES_4                                  NACCESS_4
-#define FRAMCTL_ACCESS_TIME_CYCLES_5                                  NACCESS_5
-#define FRAMCTL_ACCESS_TIME_CYCLES_6                                  NACCESS_6
-#define FRAMCTL_ACCESS_TIME_CYCLES_7                                  NACCESS_7
+#define FRAMCTL_ACCESS_TIME_CYCLES_0                                   NWAITS_0
+#define FRAMCTL_ACCESS_TIME_CYCLES_1                                   NWAITS_1
+#define FRAMCTL_ACCESS_TIME_CYCLES_2                                   NWAITS_2
+#define FRAMCTL_ACCESS_TIME_CYCLES_3                                   NWAITS_3
+#define FRAMCTL_ACCESS_TIME_CYCLES_4                                   NWAITS_4
+#define FRAMCTL_ACCESS_TIME_CYCLES_5                                   NWAITS_5
+#define FRAMCTL_ACCESS_TIME_CYCLES_6                                   NWAITS_6
+#define FRAMCTL_ACCESS_TIME_CYCLES_7                                   NWAITS_7
 
 //*****************************************************************************
 //
-// The following are values that can be passed to the accessTime parameter for
-// functions: FRAMCtl_configureWaitStateControl().
+// The following are values that can be passed to the delayStatus parameter for
+// functions: FRAMCtl_delayPowerUpFromLPM().
 //
 //*****************************************************************************
-#define FRAMCTL_PRECHARGE_TIME_CYCLES_0                               NPRECHG_0
-#define FRAMCTL_PRECHARGE_TIME_CYCLES_1                               NPRECHG_1
-#define FRAMCTL_PRECHARGE_TIME_CYCLES_2                               NPRECHG_2
-#define FRAMCTL_PRECHARGE_TIME_CYCLES_3                               NPRECHG_3
-#define FRAMCTL_PRECHARGE_TIME_CYCLES_4                               NPRECHG_4
-#define FRAMCTL_PRECHARGE_TIME_CYCLES_5                               NPRECHG_5
-#define FRAMCTL_PRECHARGE_TIME_CYCLES_6                               NPRECHG_6
-#define FRAMCTL_PRECHARGE_TIME_CYCLES_7                               NPRECHG_7
-
-//*****************************************************************************
-//
-// The following are values that can be passed to the manualWaitState parameter
-// for functions: FRAMCtl_configureWaitStateControl().
-//
-//*****************************************************************************
-#define FRAMCTL_AUTO_MODE                                                 NAUTO
-#define FRAMCTL_MANUAL_MODE                                                0x00
+#define FRAMCTL_DELAY_FROM_LPM_ENABLE                                      0x00
+#define FRAMCTL_DELAY_FROM_LPM_DISABLE                                     0x02
 
 //*****************************************************************************
 //
@@ -112,8 +94,9 @@ extern void FRAMCtl_write8(uint8_t *dataPtr,
 //!
 //! \param dataPtr is the pointer to the data to be written
 //! \param framPtr is the pointer into which to write the data
-//! \param numberOfWords
+//! \param numberOfWords is the number of words to be written
 //!
+//! \return None
 //
 //*****************************************************************************
 extern void FRAMCtl_write16(uint16_t *dataPtr,
@@ -126,8 +109,9 @@ extern void FRAMCtl_write16(uint16_t *dataPtr,
 //!
 //! \param dataPtr is the pointer to the data to be written
 //! \param framPtr is the pointer into which to write the data
-//! \param count
+//! \param count is the number of 32 bit words to be written
 //!
+//! \return None
 //
 //*****************************************************************************
 extern void FRAMCtl_write32(uint32_t *dataPtr,
@@ -140,11 +124,12 @@ extern void FRAMCtl_write32(uint32_t *dataPtr,
 //!
 //! \param value is the value to written to FRAMCTL memory
 //! \param framPtr is the pointer into which to write the data
-//! \param count
+//! \param count is the number of 32 bit addresses to fill
 //!
+//! \return None
 //
 //*****************************************************************************
-extern void FRAMCtl_memoryFill32(uint32_t value,
+extern void FRAMCtl_fillMemory32(uint32_t value,
                                  uint32_t *framPtr,
                                  uint16_t count);
 
@@ -152,11 +137,9 @@ extern void FRAMCtl_memoryFill32(uint32_t value,
 //
 //! \brief Enables selected FRAMCtl interrupt sources.
 //!
-//! If header file contains legacy definitions: FRAMCtl_PUC_ON_DOUBLE_BIT_ERROR
-//! - Enable PUC reset if FRAMCtl detects double bit error is detected.
-//! FRAMCtl_DOUBLE_BIT_ERROR_INTERRUPT - Interrupts when a double bit error is
-//! detected. FRAMCtl_SINGLE_BIT_ERROR_INTERRUPT - Interrupts when a single bit
-//! error is detected.
+//! Enables the indicated FRAMCtl interrupt sources.  Only the sources that are
+//! enabled can be reflected to the processor interrupt; disabled sources have
+//! no effect on the processor. Does not clear interrupt flags.
 //!
 //! \param interruptMask is the bit mask of the memory buffer interrupt sources
 //!        to be disabled.
@@ -167,25 +150,17 @@ extern void FRAMCtl_memoryFill32(uint32_t value,
 //!           uncorrectable bit error is detected.
 //!        - \b FRAMCTL_CORRECTABLE_BIT_INTERRUPT - Interrupts when a
 //!           correctable bit error is detected.
-//!        - \b FRAMCTL_ACCESS_VIOLATION_INTERRUPT - Interrupts when an access
-//!           violation occurs.
-//!        - \b FRAMCTL_ACCESS_TIME_ERROR_INTERRUPT - Interrupts when an access
-//!           time error occurs.
+//!
+//! Modified bits of \b GCCTL0 register and bits of \b FRCTL0 register.
 //!
 //! \return None
 //
 //*****************************************************************************
-extern void FRAMCtl_enableInterrupt(uint8_t interruptMask);
+extern void FRAMCtl_enableInterrupt(uint16_t interruptMask);
 
 //*****************************************************************************
 //
 //! \brief Returns the status of the selected FRAMCtl interrupt flags.
-//!
-//! If header file contains legacy definitions: FRAMCtl_SINGLE_BIT_ERROR_FLAG -
-//! Interrupt flag is set if a correctable bit error has been detected and
-//! corrected in the FRAMCtl memory error detection logic.
-//! FRAMCtl_DOUBLE_BIT_ERROR_FLAG .- Interrupt flag is set if an uncorrectable
-//! bit error has been detected in the FRAMCtl memory error detection logic.
 //!
 //! \param interruptFlagMask is a bit mask of the interrupt flags status to be
 //!        returned.
@@ -199,11 +174,8 @@ extern void FRAMCtl_enableInterrupt(uint8_t interruptMask);
 //!        - \b FRAMCTL_CORRECTABLE_BIT_FLAG - Interrupt flag is set if a
 //!           correctable bit error has been detected and corrected in the
 //!           FRAMCtl memory error detection logic.
-//!        - \b FRAMCTL_ACCESS_VIOLATION_FLAG - Interrupt flag is set if an
-//!           access violation is triggered.
 //!
-//! \return The current interrupt flag status for the corresponding mask.
-//!         Return Logical OR of any of the following:
+//! \return Logical OR of any of the following:
 //!         - \b FRAMCTL_ACCESS_TIME_ERROR_FLAG Interrupt flag is set if a
 //!         wrong setting for NPRECHG and NACCESS is set and FRAMCtl access
 //!         time is not hold.
@@ -213,8 +185,6 @@ extern void FRAMCtl_enableInterrupt(uint8_t interruptMask);
 //!         - \b FRAMCTL_CORRECTABLE_BIT_FLAG Interrupt flag is set if a
 //!         correctable bit error has been detected and corrected in the
 //!         FRAMCtl memory error detection logic.
-//!         - \b FRAMCTL_ACCESS_VIOLATION_FLAG Interrupt flag is set if an
-//!         access violation is triggered.
 //!         \n indicating the status of the masked flags
 //
 //*****************************************************************************
@@ -224,11 +194,9 @@ extern uint8_t FRAMCtl_getInterruptStatus(uint16_t interruptFlagMask);
 //
 //! \brief Disables selected FRAMCtl interrupt sources.
 //!
-//! If header file contains legacy definitions: FRAMCtl_PUC_ON_DOUBLE_BIT_ERROR
-//! - Enable PUC reset if FRAMCtl detects double bit error is detected.
-//! FRAMCtl_DOUBLE_BIT_ERROR_INTERRUPT - Interrupts when a double bit error is
-//! detected. FRAMCtl_SINGLE_BIT_ERROR_INTERRUPT - Interrupts when a single bit
-//! error is detected.
+//! Disables the indicated FRAMCtl interrupt sources.  Only the sources that
+//! are enabled can be reflected to the processor interrupt; disabled sources
+//! have no effect on the processor.
 //!
 //! \param interruptMask is the bit mask of the memory buffer interrupt sources
 //!        to be disabled.
@@ -239,10 +207,6 @@ extern uint8_t FRAMCtl_getInterruptStatus(uint16_t interruptFlagMask);
 //!           uncorrectable bit error is detected.
 //!        - \b FRAMCTL_CORRECTABLE_BIT_INTERRUPT - Interrupts when a
 //!           correctable bit error is detected.
-//!        - \b FRAMCTL_ACCESS_VIOLATION_INTERRUPT - Interrupts when an access
-//!           violation occurs.
-//!        - \b FRAMCTL_ACCESS_TIME_ERROR_INTERRUPT - Interrupts when an access
-//!           time error occurs.
 //!
 //! \return None
 //
@@ -251,17 +215,12 @@ extern void FRAMCtl_disableInterrupt(uint16_t interruptMask);
 
 //*****************************************************************************
 //
-//! \brief Configures the wait state control of the FRAMCtl module
-//! Configures the wait state control of the FRAM module. If using the
-//! FRAMCtl_AUTO_MODE the values for accessTime and prechargeTime do not
-//! matter.
+//! \brief Configures the access time of the FRAMCtl module
 //!
-//! \param manualWaitState chooses if the wait state control is manual or
-//!        automatic
-//!        Valid values are:
-//!        - \b FRAMCTL_AUTO_MODE
-//!        - \b FRAMCTL_MANUAL_MODE
-//! \param accessTime
+//! Configures the access time of the FRAMCtl module.
+//!
+//! \param waitState defines the number of CPU cycles required for access time
+//!        defined in the datasheet
 //!        Valid values are:
 //!        - \b FRAMCTL_ACCESS_TIME_CYCLES_0
 //!        - \b FRAMCTL_ACCESS_TIME_CYCLES_1
@@ -271,21 +230,34 @@ extern void FRAMCtl_disableInterrupt(uint16_t interruptMask);
 //!        - \b FRAMCTL_ACCESS_TIME_CYCLES_5
 //!        - \b FRAMCTL_ACCESS_TIME_CYCLES_6
 //!        - \b FRAMCTL_ACCESS_TIME_CYCLES_7
-//!        - \b FRAMCTL_PRECHARGE_TIME_CYCLES_0
-//!        - \b FRAMCTL_PRECHARGE_TIME_CYCLES_1
-//!        - \b FRAMCTL_PRECHARGE_TIME_CYCLES_2
-//!        - \b FRAMCTL_PRECHARGE_TIME_CYCLES_3
-//!        - \b FRAMCTL_PRECHARGE_TIME_CYCLES_4
-//!        - \b FRAMCTL_PRECHARGE_TIME_CYCLES_5
-//!        - \b FRAMCTL_PRECHARGE_TIME_CYCLES_6
-//!        - \b FRAMCTL_PRECHARGE_TIME_CYCLES_7
-//! \param prechargeTime
 //!
+//! Modified bits are \b NWAITS of \b GCCTL0 register.
+//!
+//! \return None
 //
 //*****************************************************************************
-extern void FRAMCtl_configureWaitStateControl(uint8_t manualWaitState,
-                                              uint8_t accessTime,
-                                              uint8_t prechargeTime);
+extern void FRAMCtl_configureWaitStateControl(uint8_t waitState);
+
+//*****************************************************************************
+//
+//! \brief Configures when the FRAMCtl module will power up after LPM exit
+//!
+//! Configures when the FRAMCtl module will power up after LPM exit. The module
+//! can either wait until the first FRAMCtl access to power up or power up
+//! immediately after leaving LPM. If FRAMCtl power is disabled, a memory
+//! access will automatically insert wait states to ensure sufficient timing
+//! for the FRAMCtl power-up and access.
+//!
+//! \param delayStatus chooses if FRAMCTL should power up instantly with LPM
+//!        exit or to wait until first FRAMCTL access after LPM exit
+//!        Valid values are:
+//!        - \b FRAMCTL_DELAY_FROM_LPM_ENABLE
+//!        - \b FRAMCTL_DELAY_FROM_LPM_DISABLE
+//!
+//! \return None
+//
+//*****************************************************************************
+extern void FRAMCtl_delayPowerUpFromLPM(uint8_t delayStatus);
 
 //*****************************************************************************
 //

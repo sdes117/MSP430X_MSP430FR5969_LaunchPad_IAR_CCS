@@ -13,7 +13,7 @@
 
 #include "inc/hw_memmap.h"
 
-#ifdef __MSP430_HAS_FRAM_FR5XX__
+#ifdef __MSP430_HAS_FRAM__
 #include "framctl.h"
 
 #include <assert.h>
@@ -40,7 +40,6 @@ void FRAMCtl_write16(uint16_t *dataPtr,uint16_t *framPtr,
         *framPtr++ = *dataPtr++;
         numberOfWords--;
     }
-
 }
 
 void FRAMCtl_write32(uint32_t *dataPtr,uint32_t *framPtr,
@@ -54,7 +53,7 @@ void FRAMCtl_write32(uint32_t *dataPtr,uint32_t *framPtr,
     }
 }
 
-void FRAMCtl_memoryFill32 (uint32_t value,
+void FRAMCtl_fillMemory32 (uint32_t value,
     uint32_t *framPtr,
     uint16_t count
     )
@@ -67,18 +66,16 @@ void FRAMCtl_memoryFill32 (uint32_t value,
     }
 }
 
-void FRAMCtl_enableInterrupt (uint8_t interruptMask)
+void FRAMCtl_enableInterrupt (uint16_t interruptMask)
 {
+    uint8_t waitSelection;
 
-	uint16_t waitSelection;
+    waitSelection=(HWREG8(FRAM_BASE + OFS_FRCTL0) & 0xFF);
+    // Clear lock in FRAM control registers
+    HWREG16(FRAM_BASE + OFS_FRCTL0) = FWPW | waitSelection;
 
-	waitSelection=(HWREG16(FRAM_BASE + OFS_FRCTL0) & 0x00FF);
-	// Clear lock in FRAM control registers
-	HWREG16(FRAM_BASE + OFS_FRCTL0) = FWPW + waitSelection;
-
-	// Enable user selected interrupt sources
+    // Enable user selected interrupt sources
     HWREG16(FRAM_BASE + OFS_GCCTL0) |= interruptMask;
-
 }
 
 uint8_t FRAMCtl_getInterruptStatus(uint16_t interruptFlagMask)
@@ -88,24 +85,38 @@ uint8_t FRAMCtl_getInterruptStatus(uint16_t interruptFlagMask)
 
 void FRAMCtl_disableInterrupt(uint16_t interruptMask)
 {
-	uint16_t waitSelection;
+	uint8_t waitSelection;
 
-	waitSelection=(HWREG16(FRAM_BASE + OFS_FRCTL0) & 0x00FF);
+	waitSelection=(HWREG8(FRAM_BASE + OFS_FRCTL0) & 0xFF);
 	//Clear lock in FRAM control registers
-	HWREG16(FRAM_BASE + OFS_FRCTL0) = FWPW + waitSelection;
+	HWREG16(FRAM_BASE + OFS_FRCTL0) = FWPW | waitSelection;
 
     HWREG16(FRAM_BASE + OFS_GCCTL0) &= ~(interruptMask);
 }
 
-void FRAMCtl_configureWaitStateControl(uint8_t manualWaitState,
-		uint8_t accessTime,
-		uint8_t prechargeTime )
-{
-	// Clear lock in FRAM control registers
-	HWREG16(FRAM_BASE + OFS_FRCTL0) = FWPW;
-
-	HWREG8(FRAM_BASE + OFS_FRCTL0_L) |= ( accessTime | manualWaitState | prechargeTime);
+void FRAMCtl_configureWaitStateControl(uint8_t waitState )
+{    
+	uint8_t tempVariable = HWREG8(FRAM_BASE + OFS_FRCTL0_L);
+	tempVariable &= ~NWAITS_7;
+	tempVariable |= waitState;
+	HWREG16(FRAM_BASE + OFS_FRCTL0) = ( FWPW | tempVariable );
 }
+
+void FRAMCtl_delayPowerUpFromLPM(uint8_t delayStatus)
+{
+#ifdef FRLPMPWR
+    uint8_t waitSelection;
+
+    waitSelection = (HWREG8(FRAM_BASE + OFS_FRCTL0) & 0xFF);
+
+    // Clear lock in FRAM control registers
+    HWREG16(FRAM_BASE + OFS_FRCTL0) = FWPW | waitSelection;
+
+	HWREG8(FRAM_BASE + OFS_GCCTL0_L) &= ~FRLPMPWR;
+	HWREG8(FRAM_BASE + OFS_GCCTL0_L) |= delayStatus;
+#endif
+}
+
 
 #endif
 //*****************************************************************************

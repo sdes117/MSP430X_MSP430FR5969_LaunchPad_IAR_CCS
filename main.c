@@ -218,7 +218,8 @@ static void prvSetupHardware( void )
 
     /* Set required GPIO pins to output and low. */
     GPIO_setOutputLowOnPin( GPIO_PORT_P1, GPIO_PIN6 | GPIO_PIN7 ); /* I2C */
-    GPIO_setOutputLowOnPin( GPIO_PORT_P2, GPIO_PIN0 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN7 );
+    GPIO_setOutputLowOnPin( GPIO_PORT_P2, GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN7 );
+    GPIO_setOutputHighOnPin( GPIO_PORT_P2, GPIO_PIN0 ); /* UCA0TXD */
     GPIO_setOutputLowOnPin( GPIO_PORT_P3, GPIO_PIN6 | GPIO_PIN7 );
     // no port 4: GPIO_setOutputLowOnPin( GPIO_PORT_P4, GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7 );
     //GPIO_setOutputLowOnPin( GPIO_PORT_PJ, GPIO_PIN0 );
@@ -251,10 +252,10 @@ static void prvSetupHardware( void )
     CS_setDCOFreq( CS_DCORSEL_0, CS_DCOFSEL_3 );
 
     /* Set external clock frequency to 16.000 MHz. */
-    CS_setExternalClockSource( 16000000, 0 );
+    CS_setExternalClockSource( 16000000, 16000000 );
 
     /* Set ACLK = XT1 with freq divider 4 (gives 4MHz ACLK). */
-    CS_initClockSignal( CS_ACLK, CS_XT1CLK_SELECT, CS_CLOCK_DIVIDER_4 );
+    CS_initClockSignal( CS_ACLK, CS_HFXTCLK_SELECT, CS_CLOCK_DIVIDER_4 );
     // (internal DCO): CS_initClockSignal( CS_ACLK, CS_VLOCLK_SELECT, CS_CLOCK_DIVIDER_1 );
 
     /* Set SMCLK = DCO with frequency divider of 1. */
@@ -264,7 +265,7 @@ static void prvSetupHardware( void )
     CS_initClockSignal( CS_MCLK, CS_DCOCLK_SELECT, CS_CLOCK_DIVIDER_1 );
 
     /* Start XT1 with no time out. */
-    CS_turnOnXT1( XT1DRIVE_3 );
+    CS_turnOnHFXT( CS_HFXT_DRIVE_16MHZ_24MHZ );
 
     /* Disable the GPIO power-on default high-impedance mode. */
     PMM_unlockLPM5();
@@ -280,6 +281,7 @@ static void prvSetupHardware( void )
             GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5,
             GPIO_TERNARY_MODULE_FUNCTION);
 
+#if 0 /* FR5759*/
     //Initialize the ADC10B Module
     /*
      * Base Address for the ADC10B Module
@@ -287,21 +289,21 @@ static void prvSetupHardware( void )
      * USE MODOSC 5MHZ Digital Oscillator as clock source
      * Use default clock divider of 1
      */
-    ADC10_B_init(ADC10_B_BASE,
-        ADC10_B_SAMPLEHOLDSOURCE_SC,
-        ADC10_B_CLOCKSOURCE_ADC10OSC,
-        ADC10_B_CLOCKDIVIDER_1);
+    ADC12_B_init(ADC12_B_BASE,
+        ADC12_B_SAMPLEHOLDSOURCE_SC,
+        ADC12_B_CLOCKSOURCE_ADC10OSC,
+        ADC12_B_CLOCKDIVIDER_1);
 
-    ADC10_B_enable(ADC10_B_BASE);
+    ADC12_B_enable(ADC12_B_BASE);
 
     /*
      * Base Address for the ADC10B Module
-     * Sample/hold for 16 clock cycles
+     * Sample/hold for 256 clock cycles (~19.5kHz sampling rate)
      * Enable Multiple Sampling
      */
-    ADC10_B_setupSamplingTimer(ADC10_B_BASE,
-        ADC10_B_CYCLEHOLD_256_CYCLES,
-        ADC10_B_MULTIPLESAMPLESENABLE);
+    ADC12_B_setupSamplingTimer(ADC12_B_BASE,
+        ADC12_B_CYCLEHOLD_256_CYCLES,
+        ADC12_B_MULTIPLESAMPLESENABLE);
 
     //Configure the Memory Buffer
     /*
@@ -310,18 +312,81 @@ static void prvSetupHardware( void )
      * Use positive reference of AVcc
      * Use negative reference of AVss
      */
-    ADC10_B_configureMemory(ADC10_B_BASE,
-        ADC10_B_INPUT_A15,
-        //ADC10_B_INPUT_A12,
-        ADC10_B_VREFPOS_AVCC,
-        ADC10_B_VREFNEG_AVSS);
+    ADC12_B_configureMemory(ADC12_B_BASE,
+        ADC12_B_INPUT_A15,
+        //ADC12_B_INPUT_A12,
+        ADC12_B_VREFPOS_AVCC,
+        ADC12_B_VREFNEG_AVSS);
 
-    ADC10_B_clearInterrupt(ADC10_B_BASE,
+    ADC12_B_clearInterrupt(ADC12_B_BASE,
         ADC10IE0);
 
     //Enable the Memory Buffer Interrupt
-    ADC10_B_enableInterrupt(ADC10_B_BASE,
+    ADC12_B_enableInterrupt(ADC12_B_BASE,
         ADC10IE0);
+#else
+    //Initialize the ADC12B Module
+    /*
+    * Base address of ADC12B Module
+    * Use internal ADC12B bit as sample/hold signal to start conversion
+    * USE MODOSC 5MHZ Digital Oscillator as clock source
+    * Use default clock divider/pre-divider of 1
+    * Not use internal channel
+    */
+    ADC12_B_initParam initParam = {0};
+    initParam.sampleHoldSignalSourceSelect = ADC12_B_SAMPLEHOLDSOURCE_SC;
+    initParam.clockSourceSelect = ADC12_B_CLOCKSOURCE_ADC12OSC;
+    initParam.clockSourceDivider = ADC12_B_CLOCKDIVIDER_1;
+    initParam.clockSourcePredivider = ADC12_B_CLOCKPREDIVIDER__1;
+    initParam.internalChannelMap = ADC12_B_NOINTCH;
+    ADC12_B_init(ADC12_B_BASE, &initParam);
+
+    //Enable the ADC12B module
+    ADC12_B_enable(ADC12_B_BASE);
+
+    /*
+    * Base address of ADC12B Module
+    * For memory buffers 0-7 sample/hold for 256 clock cycles
+    * For memory buffers 8-15 sample/hold for 256 clock cycles (default)
+    * Enable Multiple Sampling
+    */
+    ADC12_B_setupSamplingTimer(ADC12_B_BASE,
+      ADC12_B_CYCLEHOLD_256_CYCLES,
+      ADC12_B_CYCLEHOLD_256_CYCLES,
+      ADC12_B_MULTIPLESAMPLESENABLE);
+
+    //Configure Memory Buffer
+    /*
+    * Base address of the ADC12B Module
+    * Configure memory buffer 0
+    * Map input A1 to memory buffer 0
+    * Vref+ = AVcc
+    * Vref- = AVss
+    * Memory buffer 0 is not the end of a sequence
+    */
+    /* VGL: TODO */
+    ADC12_B_configureMemoryParam configureMemoryParam = {0};
+    configureMemoryParam.memoryBufferControlIndex = ADC12_B_MEMORY_0;
+    configureMemoryParam.inputSourceSelect = ADC12_B_INPUT_A0;
+    configureMemoryParam.refVoltageSourceSelect = ADC12_B_VREFPOS_AVCC_VREFNEG_VSS;
+    configureMemoryParam.endOfSequence = ADC12_B_ENDOFSEQUENCE;
+    configureMemoryParam.windowComparatorSelect = ADC12_B_WINDOW_COMPARATOR_DISABLE;
+    configureMemoryParam.differentialModeSelect = ADC12_B_DIFFERENTIAL_MODE_DISABLE;
+    ADC12_B_configureMemory(ADC12_B_BASE, &configureMemoryParam);
+
+
+    ADC12_B_clearInterrupt(ADC12_B_BASE,
+        0,
+        ADC12_B_IFG0
+        );
+
+    //Enable memory buffer 0 interrupt
+    ADC12_B_enableInterrupt(ADC12_B_BASE,
+      ADC12_B_IE0,
+      0,
+      0);
+
+#endif /* !5759 */
 
     __delay_cycles(160000);
     can_init();

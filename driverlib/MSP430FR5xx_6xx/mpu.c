@@ -25,7 +25,7 @@
 // obtained from the User's Guide.
 //
 //*****************************************************************************
-#define MPU_MAX_SEG_VALUE                                                    20
+#define MPU_MAX_SEG_VALUE                                                0x13C1
 
 void MPU_initTwoSegments(uint16_t baseAddress,
         uint16_t seg1boundary,
@@ -37,7 +37,8 @@ void MPU_initTwoSegments(uint16_t baseAddress,
     HWREG16(baseAddress + OFS_MPUCTL0) = MPUPW | HWREG8(baseAddress + OFS_MPUCTL0);
 
     // Create two memory segmentations
-    HWREG16(baseAddress + OFS_MPUSEG) = (seg1boundary<<8)+seg1boundary;
+    HWREG16(baseAddress + OFS_MPUSEGB1) = seg1boundary;
+    HWREG16(baseAddress + OFS_MPUSEGB2) = seg1boundary;
 
     // Set access rights based on user's selection for segment1
     switch (seg1accmask) {
@@ -103,7 +104,8 @@ void MPU_initThreeSegments(uint16_t baseAddress,
     HWREG16(baseAddress + OFS_MPUCTL0) = MPUPW | HWREG8(baseAddress + OFS_MPUCTL0);
 
     // Create two memory segmentations
-    HWREG16(baseAddress + OFS_MPUSEG) = ((param->seg2boundary)<<8) + param->seg1boundary;
+    HWREG16(baseAddress + OFS_MPUSEGB1) = param->seg1boundary;
+    HWREG16(baseAddress + OFS_MPUSEGB2) = param->seg2boundary;
 
     // Set access rights based on user's selection for segment1
     switch (param->seg1accmask) {
@@ -213,6 +215,15 @@ void MPU_initInfoSegment(uint16_t baseAddress, uint8_t accmask)
     //Lock MPU to disable writing to all registers
     HWREG8(baseAddress + OFS_MPUCTL0_H) = 0x00;
 }
+void MPU_enableNMIevent(uint16_t baseAddress)
+{
+    HWREG16(baseAddress + OFS_MPUCTL0) = MPUPW | MPUSEGIE |
+                                            HWREG8(baseAddress + OFS_MPUCTL0);
+
+    //Lock MPU to disable writing to all registers
+    HWREG8(baseAddress + OFS_MPUCTL0_H) = 0x00;
+}
+
 void MPU_start(uint16_t baseAddress)
 {
     HWREG16(baseAddress + OFS_MPUCTL0) = MPUPW | MPUENA | HWREG8(baseAddress + OFS_MPUCTL0);
@@ -275,6 +286,15 @@ uint16_t MPU_clearAllInterrupts(uint16_t baseAddress
     HWREG8(baseAddress + OFS_MPUCTL0_H) = 0x00;
 
     return (HWREG16(baseAddress + OFS_MPUCTL1) & (MPUSEG1IFG + MPUSEG2IFG + MPUSEG3IFG));
+}
+
+void MPU_lockMPU(uint16_t baseAddress)
+{
+    HWREG16(baseAddress + OFS_MPUCTL0) = MPUPW | MPULOCK |
+                                            HWREG8(baseAddress + OFS_MPUCTL0);
+
+    //Lock MPU to disable writing to all registers
+    HWREG8(baseAddress + OFS_MPUCTL0_H) = 0x00;
 }
 
 

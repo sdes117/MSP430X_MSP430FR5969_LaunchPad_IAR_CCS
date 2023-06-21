@@ -9,7 +9,7 @@
 
 #include "inc/hw_memmap.h"
 
-#ifdef __MSP430_HAS_CS__
+#if defined(__MSP430_HAS_CS__) || defined(__MSP430_HAS_SFR__)
 
 //*****************************************************************************
 //
@@ -53,32 +53,34 @@ extern "C"
 // functions: CS_initClockSignal().
 //
 //*****************************************************************************
-#define CS_XT1CLK_SELECT                                           SELM__XT1CLK
 #define CS_VLOCLK_SELECT                                           SELM__VLOCLK
 #define CS_DCOCLK_SELECT                                           SELM__DCOCLK
-#define CS_XT2CLK_SELECT                                           SELM__XT2CLK
+#define CS_LFXTCLK_SELECT                                         SELM__LFXTCLK
+#define CS_HFXTCLK_SELECT                                         SELM__HFXTCLK
+#define CS_LFMODOSC_SELECT                                       SELM__LFMODOSC
+#define CS_MODOSC_SELECT                                           SELM__MODOSC
 
 //*****************************************************************************
 //
-// The following are values that can be passed to the xt1drive parameter for
-// functions: CS_turnOnXT1(), and CS_turnOnXT1WithTimeout().
+// The following are values that can be passed to the lfxtdrive parameter for
+// functions: CS_turnOnLFXT(), and CS_turnOnLFXTWithTimeout().
 //
 //*****************************************************************************
-#define CS_XT1_DRIVE_0                                               XT1DRIVE_0
-#define CS_XT1_DRIVE_1                                               XT1DRIVE_1
-#define CS_XT1_DRIVE_2                                               XT1DRIVE_2
-#define CS_XT1_DRIVE_3                                               XT1DRIVE_3
+#define CS_LFXT_DRIVE_0                                             LFXTDRIVE_0
+#define CS_LFXT_DRIVE_1                                             LFXTDRIVE_1
+#define CS_LFXT_DRIVE_2                                             LFXTDRIVE_2
+#define CS_LFXT_DRIVE_3                                             LFXTDRIVE_3
 
 //*****************************************************************************
 //
-// The following are values that can be passed to the xt2drive parameter for
-// functions: CS_turnOnXT2(), and CS_turnOnXT2WithTimeout().
+// The following are values that can be passed to the hfxtdrive parameter for
+// functions: CS_turnOnHFXT(), and CS_turnOnHFXTWithTimeout().
 //
 //*****************************************************************************
-#define CS_XT2_DRIVE_4MHZ_8MHZ                                       XT2DRIVE_0
-#define CS_XT2_DRIVE_8MHZ_16MHZ                                      XT2DRIVE_1
-#define CS_XT2_DRIVE_16MHZ_24MHZ                                     XT2DRIVE_2
-#define CS_XT2_DRIVE_24MHZ_32MHZ                                     XT2DRIVE_3
+#define CS_HFXT_DRIVE_4MHZ_8MHZ                                     HFXTDRIVE_0
+#define CS_HFXT_DRIVE_8MHZ_16MHZ                                    HFXTDRIVE_1
+#define CS_HFXT_DRIVE_16MHZ_24MHZ                                   HFXTDRIVE_2
+#define CS_HFXT_DRIVE_24MHZ_32MHZ                                   HFXTDRIVE_3
 
 //*****************************************************************************
 //
@@ -87,8 +89,8 @@ extern "C"
 // returned by the CS_getFaultFlagStatus() function.
 //
 //*****************************************************************************
-#define CS_XT2OFFG                                                      XT2OFFG
-#define CS_XT1OFFG                                                      XT1OFFG
+#define CS_LFXTOFFG                                                    LFXTOFFG
+#define CS_HFXTOFFG                                                    HFXTOFFG
 
 //*****************************************************************************
 //
@@ -96,7 +98,7 @@ extern "C"
 // functions: CS_setDCOFreq().
 //
 //*****************************************************************************
-#define CS_DCORSEL_0                                                  DCOFSEL_0
+#define CS_DCORSEL_0                                                       0x00
 #define CS_DCORSEL_1                                                    DCORSEL
 
 //*****************************************************************************
@@ -109,6 +111,9 @@ extern "C"
 #define CS_DCOFSEL_1                                                  DCOFSEL_1
 #define CS_DCOFSEL_2                                                  DCOFSEL_2
 #define CS_DCOFSEL_3                                                  DCOFSEL_3
+#define CS_DCOFSEL_4                                                  DCOFSEL_4
+#define CS_DCOFSEL_5                                                  DCOFSEL_5
+#define CS_DCOFSEL_6                                                  DCOFSEL_6
 
 //*****************************************************************************
 //
@@ -120,20 +125,21 @@ extern "C"
 //
 //! \brief Sets the external clock source
 //!
-//! This function sets the external clock sources XT1 and XT2 crystal
+//! This function sets the external clock sources LFXT and HFXT crystal
 //! oscillator frequency values. This function must be called if an external
-//! crystal XT1 or XT2 is used and the user intends to call CS_getMCLK,
-//! CS_getSMCLK, CS_getACLK and turnOnXT1, XT1ByPass, turnOnXT1WithTimeout,
-//! XT1ByPassWithTimeout.
+//! crystal LFXT or HFXT is used and the user intends to call CS_getMCLK,
+//! CS_getSMCLK, CS_getACLK and CS_turnOnLFXT, CS_LFXTByPass,
+//! CS_turnOnLFXTWithTimeout, CS_LFXTByPassWithTimeout, CS_turnOnHFXT,
+//! CS_HFXTByPass, CS_turnOnHFXTWithTimeout, CS_HFXTByPassWithTimeout.
 //!
-//! \param XT1CLK_frequency is the XT1 crystal frequencies in Hz
-//! \param XT2CLK_frequency is the XT2 crystal frequencies in Hz
+//! \param LFXTCLK_frequency is the LFXT crystal frequencies in Hz
+//! \param HFXTCLK_frequency is the HFXT crystal frequencies in Hz
 //!
 //! \return None
 //
 //*****************************************************************************
-extern void CS_setExternalClockSource(uint32_t XT1CLK_frequency,
-                                      uint32_t XT2CLK_frequency);
+extern void CS_setExternalClockSource(uint32_t LFXTCLK_frequency,
+                                      uint32_t HFXTCLK_frequency);
 
 //*****************************************************************************
 //
@@ -145,19 +151,21 @@ extern void CS_setExternalClockSource(uint32_t XT1CLK_frequency,
 //! documentation for CS module or Device Family User's Guide for details of
 //! default clock signal states.
 //!
-//! \param selectedClockSignal is the selected clock signal
+//! \param selectedClockSignal Selected clock signal
 //!        Valid values are:
 //!        - \b CS_ACLK
 //!        - \b CS_MCLK
 //!        - \b CS_SMCLK
 //!        - \b CS_MODOSC
-//! \param clockSource is Clock source for the selectedClock
+//! \param clockSource is the selected clock signal
 //!        Valid values are:
-//!        - \b CS_XT1CLK_SELECT
 //!        - \b CS_VLOCLK_SELECT
-//!        - \b CS_DCOCLK_SELECT
-//!        - \b CS_XT2CLK_SELECT
-//! \param clockSourceDivider selects the clock divider to calculate clock
+//!        - \b CS_DCOCLK_SELECT - [Not available for ACLK]
+//!        - \b CS_LFXTCLK_SELECT
+//!        - \b CS_HFXTCLK_SELECT - [Not available for ACLK]
+//!        - \b CS_LFMODOSC_SELECT
+//!        - \b CS_MODOSC_SELECT - [Not available for ACLK]
+//! \param clockSourceDivider is the selected clock divider to calculate clock
 //!        signal from clock source.
 //!        Valid values are:
 //!        - \b CS_CLOCK_DIVIDER_1 - [Default for ACLK]
@@ -179,20 +187,21 @@ extern void CS_initClockSignal(uint8_t selectedClockSignal,
 
 //*****************************************************************************
 //
-//! \brief Initializes the XT1 crystal oscillator in low frequency mode.
+//! \brief Initializes the LFXT crystal in low frequency mode.
 //!
-//! Loops until all oscillator fault flags are cleared, with no timeout. See
-//! the device-specific data sheet for appropriate drive settings. IMPORTANT:
-//! User must call CS_setExternalClockSource function to set frequency of
-//! external clocks before calling this function.
+//! Initializes the LFXT crystal oscillator in low frequency mode. Loops until
+//! all oscillator fault flags are cleared, with no timeout. See the device-
+//! specific data sheet for appropriate drive settings. IMPORTANT: User must
+//! call CS_setExternalClockSource function to set frequency of external clocks
+//! before calling this function.
 //!
-//! \param xt1drive is the target drive strength for the XT1 crystal
+//! \param lfxtdrive is the target drive strength for the LFXT crystal
 //!        oscillator.
 //!        Valid values are:
-//!        - \b CS_XT1_DRIVE_0
-//!        - \b CS_XT1_DRIVE_1
-//!        - \b CS_XT1_DRIVE_2
-//!        - \b CS_XT1_DRIVE_3 [Default]
+//!        - \b CS_LFXT_DRIVE_0
+//!        - \b CS_LFXT_DRIVE_1
+//!        - \b CS_LFXT_DRIVE_2
+//!        - \b CS_LFXT_DRIVE_3 [Default]
 //!
 //! Modified bits of \b CSCTL0 register, bits of \b CSCTL5 register, bits of \b
 //! CSCTL4 register and bits of \b SFRIFG1 register.
@@ -200,23 +209,11 @@ extern void CS_initClockSignal(uint8_t selectedClockSignal,
 //! \return None
 //
 //*****************************************************************************
-extern void CS_turnOnXT1(uint16_t xt1drive);
+extern void CS_turnOnLFXT(uint16_t lfxtdrive);
 
 //*****************************************************************************
 //
-//! \brief Turn on SMCLK
-//!
-//!
-//! Modified bits of \b CSCTL4 register.
-//!
-//! \return None
-//
-//*****************************************************************************
-extern void CS_turnOnSMCLK(void);
-
-//*****************************************************************************
-//
-//! \brief Turn off SMCLK
+//! \brief Turns off SMCLK using the SMCLKOFF bit.
 //!
 //!
 //! Modified bits of \b CSCTL4 register.
@@ -228,74 +225,7 @@ extern void CS_turnOffSMCLK(void);
 
 //*****************************************************************************
 //
-//! \brief Bypasses the XT1 crystal oscillator.
-//!
-//! Loops until all oscillator fault flags are cleared, with no timeout.
-//! IMPORTANT: User must call CS_setExternalClockSource function to set
-//! frequency of external clocks before calling this function.
-//!
-//!
-//! Modified bits of \b CSCTL0 register, bits of \b CSCTL5 register, bits of \b
-//! CSCTL4 register and bits of \b SFRIFG register.
-//!
-//! \return None
-//
-//*****************************************************************************
-extern void CS_bypassXT1(void);
-
-//*****************************************************************************
-//
-//! \brief Initializes the XT1 crystal oscillator in low frequency mode with
-//! timeout.
-//!
-//! Loops until all oscillator fault flags are cleared or until a timeout
-//! counter is decremented and equals to zero. See the device-specific
-//! datasheet for appropriate drive settings. IMPORTANT: User must call
-//! CS_setExternalClockSource function to set frequency of external clocks
-//! before calling this function.
-//!
-//! \param xt1drive is the target drive strength for the XT1 crystal
-//!        oscillator.
-//!        Valid values are:
-//!        - \b CS_XT1_DRIVE_0
-//!        - \b CS_XT1_DRIVE_1
-//!        - \b CS_XT1_DRIVE_2
-//!        - \b CS_XT1_DRIVE_3 [Default]
-//! \param timeout is the count value that gets decremented every time the loop
-//!        that clears oscillator fault flags gets executed.
-//!
-//! Modified bits of \b CSCTL0 register, bits of \b CSCTL5 register, bits of \b
-//! CSCTL4 register and bits of \b SFRIFG1 register.
-//!
-//! \return STATUS_SUCCESS or STATUS_FAIL
-//
-//*****************************************************************************
-extern bool CS_turnOnXT1WithTimeout(uint16_t xt1drive,
-                                    uint32_t timeout);
-
-//*****************************************************************************
-//
-//! \brief Bypasses the XT1 crystal oscillator with timeout.
-//!
-//! Loops until all oscillator fault flags are cleared or until a timeout
-//! counter is decremented and equals to zero.IMPORTANT: User must call
-//! CS_setExternalClockSource to set frequency of external clocks before
-//! calling this function
-//!
-//! \param timeout is the count value that gets decremented every time the loop
-//!        that clears oscillator fault flags gets executed.
-//!
-//! Modified bits of \b CSCTL0 register, bits of \b CSCTL5 register, bits of \b
-//! CSCTL4 register and bits of \b SFRIFG register.
-//!
-//! \return STATUS_SUCCESS or STATUS_FAIL
-//
-//*****************************************************************************
-extern bool CS_bypassXT1WithTimeout(uint32_t timeout);
-
-//*****************************************************************************
-//
-//! \brief Stops the XT1 oscillator using the XT1OFF bit.
+//! \brief Turns on SMCLK using the SMCLKOFF bit.
 //!
 //!
 //! Modified bits of \b CSCTL4 register.
@@ -303,42 +233,125 @@ extern bool CS_bypassXT1WithTimeout(uint32_t timeout);
 //! \return None
 //
 //*****************************************************************************
-extern void CS_turnOffXT1(void);
+extern void CS_turnOnSMCLK(void);
 
 //*****************************************************************************
 //
-//! \brief Starts the XT2 crystal
+//! \brief Bypasses the LFXT crystal oscillator.
 //!
-//! Initializes the XT2 crystal oscillator, which supports crystal frequencies
-//! between 4 MHz and 32 MHz, depending on the selected drive strength. Loops
+//! Bypasses the LFXT crystal oscillator. Loops until all oscillator fault
+//! flags are cleared, with no timeout. IMPORTANT: User must call
+//! CS_setExternalClockSource function to set frequency of external clocks
+//! before calling this function.
+//!
+//!
+//! Modified bits of \b CSCTL0 register, bits of \b CSCTL5 register, bits of \b
+//! CSCTL4 register and bits of \b SFRIFG register.
+//!
+//! \return None
+//
+//*****************************************************************************
+extern void CS_bypassLFXT(void);
+
+//*****************************************************************************
+//
+//! \brief Initializes the LFXT crystal oscillator in low frequency mode with
+//! timeout.
+//!
+//! Initializes the LFXT crystal oscillator in low frequency mode with timeout.
+//! Loops until all oscillator fault flags are cleared or until a timeout
+//! counter is decremented and equals to zero. See the device-specific
+//! datasheet for appropriate drive settings. IMPORTANT: User must call
+//! CS_setExternalClockSource to set frequency of external clocks before
+//! calling this function.
+//!
+//! \param lfxtdrive is the target drive strength for the LFXT crystal
+//!        oscillator.
+//!        Valid values are:
+//!        - \b CS_LFXT_DRIVE_0
+//!        - \b CS_LFXT_DRIVE_1
+//!        - \b CS_LFXT_DRIVE_2
+//!        - \b CS_LFXT_DRIVE_3 [Default]
+//! \param timeout is the count value that gets decremented every time the loop
+//!        that clears oscillator fault flags gets executed.
+//!
+//! Modified bits of \b CSCTL0 register, bits of \b CSCTL5 register, bits of \b
+//! CSCTL4 register and bits of \b SFRIFG1 register.
+//!
+//! \return STATUS_SUCCESS or STATUS_FAIL indicating if the LFXT crystal
+//!         oscillator was initialized successfully
+//
+//*****************************************************************************
+extern bool CS_turnOnLFXTWithTimeout(uint16_t lfxtdrive,
+                                     uint32_t timeout);
+
+//*****************************************************************************
+//
+//! \brief Bypass the LFXT crystal oscillator with timeout.
+//!
+//! Bypasses the LFXT crystal oscillator with timeout. Loops until all
+//! oscillator fault flags are cleared or until a timeout counter is
+//! decremented and equals to zero. NOTE: User must call
+//! CS_setExternalClockSource to set frequency of external clocks before
+//! calling this function.
+//!
+//! \param timeout is the count value that gets decremented every time the loop
+//!        that clears oscillator fault flags gets executed.
+//!
+//! Modified bits of \b CSCTL0 register, bits of \b CSCTL5 register, bits of \b
+//! CSCTL4 register and bits of \b SFRIFG register.
+//!
+//! \return STATUS_SUCCESS or STATUS_FAIL
+//
+//*****************************************************************************
+extern bool CS_bypassLFXTWithTimeout(uint32_t timeout);
+
+//*****************************************************************************
+//
+//! \brief Stops the LFXT oscillator using the LFXTOFF bit.
+//!
+//!
+//! Modified bits of \b CSCTL4 register.
+//!
+//! \return None
+//
+//*****************************************************************************
+extern void CS_turnOffLFXT(void);
+
+//*****************************************************************************
+//
+//! \brief Starts the HFXFT crystal
+//!
+//! Initializes the HFXT crystal oscillator, which supports crystal frequencies
+//! between 0 MHz and 24 MHz, depending on the selected drive strength. Loops
 //! until all oscillator fault flags are cleared, with no timeout. See the
 //! device-specific data sheet for appropriate drive settings. NOTE: User must
 //! call CS_setExternalClockSource to set frequency of external clocks before
 //! calling this function.
 //!
-//! \param xt2drive is the target drive strength for the XT2 crystal
+//! \param hfxtdrive is the target drive strength for the HFXT crystal
 //!        oscillator.
 //!        Valid values are:
-//!        - \b CS_XT2_DRIVE_4MHZ_8MHZ
-//!        - \b CS_XT2_DRIVE_8MHZ_16MHZ
-//!        - \b CS_XT2_DRIVE_16MHZ_24MHZ
-//!        - \b CS_XT2_DRIVE_24MHZ_32MHZ [Default]
+//!        - \b CS_HFXT_DRIVE_4MHZ_8MHZ
+//!        - \b CS_HFXT_DRIVE_8MHZ_16MHZ
+//!        - \b CS_HFXT_DRIVE_16MHZ_24MHZ
+//!        - \b CS_HFXT_DRIVE_24MHZ_32MHZ [Default]
 //!
-//! Modified bits of \b CSCTL0 register, bits of \b CSCTL5 register, bits of \b
-//! CSCTL4 register and bits of \b SFRIFG1 register.
+//! Modified bits of \b CSCTL5 register, bits of \b CSCTL4 register and bits of
+//! \b SFRIFG1 register.
 //!
 //! \return None
 //
 //*****************************************************************************
-extern void CS_turnOnXT2(uint16_t xt2drive);
+extern void CS_turnOnHFXT(uint16_t hfxtdrive);
 
 //*****************************************************************************
 //
-//! \brief Bypasses the XT2 crystal oscillator
+//! \brief Bypasses the HFXT crystal oscillator
 //!
-//! Bypasses the XT2 crystal oscillator which supports crystal frequencies
-//! between 4 MHz and 32 MHz. Loops until all oscillator fault flags are
-//! cleared, with no timeout. NOTE: User must call CS_setExternalClockSource to
+//! Bypasses the HFXT crystal oscillator, which supports crystal frequencies
+//! between 0 MHz and 24 MHz. Loops until all oscillator fault flags are
+//! cleared, with no timeout.NOTE: User must call CS_setExternalClockSource to
 //! set frequency of external clocks before calling this function.
 //!
 //!
@@ -348,26 +361,26 @@ extern void CS_turnOnXT2(uint16_t xt2drive);
 //! \return None
 //
 //*****************************************************************************
-extern void CS_bypassXT2(void);
+extern void CS_bypassHFXT(void);
 
 //*****************************************************************************
 //
-//! \brief Initializes the XT2 crystal oscillator with timeout
+//! \brief Initializes the HFXT crystal oscillator with timeout.
 //!
-//! Initializes the XT2 crystal oscillator, which supports crystal frequencies
-//! between 4 MHz and 32 MHz, depending on the selected drive strength. Loops
+//! Initializes the HFXT crystal oscillator, which supports crystal frequencies
+//! between 0 MHz and 24 MHz, depending on the selected drive strength. Loops
 //! until all oscillator fault flags are cleared or until a timeout counter is
 //! decremented and equals to zero. See the device-specific data sheet for
 //! appropriate drive settings. NOTE: User must call CS_setExternalClockSource
 //! to set frequency of external clocks before calling this function.
 //!
-//! \param xt2drive is the target drive strength for the XT2 crystal
+//! \param hfxtdrive is the target drive strength for the HFXT crystal
 //!        oscillator.
 //!        Valid values are:
-//!        - \b CS_XT2_DRIVE_4MHZ_8MHZ
-//!        - \b CS_XT2_DRIVE_8MHZ_16MHZ
-//!        - \b CS_XT2_DRIVE_16MHZ_24MHZ
-//!        - \b CS_XT2_DRIVE_24MHZ_32MHZ [Default]
+//!        - \b CS_HFXT_DRIVE_4MHZ_8MHZ
+//!        - \b CS_HFXT_DRIVE_8MHZ_16MHZ
+//!        - \b CS_HFXT_DRIVE_16MHZ_24MHZ
+//!        - \b CS_HFXT_DRIVE_24MHZ_32MHZ [Default]
 //! \param timeout is the count value that gets decremented every time the loop
 //!        that clears oscillator fault flags gets executed.
 //!
@@ -377,18 +390,18 @@ extern void CS_bypassXT2(void);
 //! \return STATUS_SUCCESS or STATUS_FAIL
 //
 //*****************************************************************************
-extern bool CS_turnOnXT2WithTimeout(uint16_t xt2drive,
-                                    uint32_t timeout);
+extern bool CS_turnOnHFXTWithTimeout(uint16_t hfxtdrive,
+                                     uint32_t timeout);
 
 //*****************************************************************************
 //
-//! \brief Bypasses the XT2 crystal oscillator with timeout
+//! \brief Bypasses the HFXT crystal  oscillator with timeout
 //!
-//! Bypasses the XT2 crystal oscillator with timeout, which supports crystal
-//! frequencies between 4 MHz and 32 MHz. Loops until all oscillator fault
-//! flags are cleared or until a timeout counter is decremented and equals to
-//! zero. NOTE: User must call CS_setExternalClockSource to set frequency of
-//! external clocks before calling this function.
+//! Bypasses the HFXT crystal oscillator, which supports crystal frequencies
+//! between 0 MHz and 24 MHz. Loops until all oscillator fault flags are
+//! cleared or until a timeout counter is decremented and equals to zero. NOTE:
+//! User must call CS_setExternalClockSource to set frequency of external
+//! clocks before calling this function.
 //!
 //! \param timeout is the count value that gets decremented every time the loop
 //!        that clears oscillator fault flags gets executed.
@@ -399,11 +412,11 @@ extern bool CS_turnOnXT2WithTimeout(uint16_t xt2drive,
 //! \return STATUS_SUCCESS or STATUS_FAIL
 //
 //*****************************************************************************
-extern bool CS_bypassXT2WithTimeout(uint32_t timeout);
+extern bool CS_bypassHFXTWithTimeout(uint32_t timeout);
 
 //*****************************************************************************
 //
-//! \brief Stops the XT2 oscillator using the XT2OFF bit.
+//! \brief Stops the HFXT oscillator using the HFXTOFF bit.
 //!
 //!
 //! Modified bits of \b CSCTL4 register.
@@ -411,7 +424,7 @@ extern bool CS_bypassXT2WithTimeout(uint32_t timeout);
 //! \return None
 //
 //*****************************************************************************
-extern void CS_turnOffXT2(void);
+extern void CS_turnOffHFXT(void);
 
 //*****************************************************************************
 //
@@ -453,14 +466,15 @@ extern void CS_disableClockRequest(uint8_t selectClock);
 //
 //! \brief Gets the current CS fault flag status.
 //!
-//! \param mask is the masked interrupt flag status to be returned.
+//! \param mask is the masked interrupt flag status to be returned. Mask
+//!        parameter can be either any of the following selection.
 //!        Mask value is the logical OR of any of the following:
-//!        - \b CS_XT2OFFG - XT2 oscillator fault flag
-//!        - \b CS_XT1OFFG - XT2 oscillator fault flag (HF mode)
+//!        - \b CS_LFXTOFFG - LFXT oscillator fault flag
+//!        - \b CS_HFXTOFFG - HFXT oscillator fault flag
 //!
 //! \return Logical OR of any of the following:
-//!         - \b CS_XT2OFFG XT2 oscillator fault flag
-//!         - \b CS_XT1OFFG XT2 oscillator fault flag (HF mode)
+//!         - \b CS_LFXTOFFG LFXT oscillator fault flag
+//!         - \b CS_HFXTOFFG HFXT oscillator fault flag
 //!         \n indicating the status of the masked interrupts
 //
 //*****************************************************************************
@@ -470,10 +484,11 @@ extern uint8_t CS_getFaultFlagStatus(uint8_t mask);
 //
 //! \brief Clears the current CS fault flag status for the masked bit.
 //!
-//! \param mask is the masked interrupt flag status to be returned.
+//! \param mask is the masked interrupt flag status to be returned. mask
+//!        parameter can be any one of the following
 //!        Mask value is the logical OR of any of the following:
-//!        - \b CS_XT2OFFG - XT2 oscillator fault flag
-//!        - \b CS_XT1OFFG - XT2 oscillator fault flag (HF mode)
+//!        - \b CS_LFXTOFFG - LFXT oscillator fault flag
+//!        - \b CS_HFXTOFFG - HFXT oscillator fault flag
 //!
 //! Modified bits of \b CSCTL5 register.
 //!
@@ -488,7 +503,7 @@ extern void CS_clearFaultFlag(uint8_t mask);
 //!
 //! If a oscillator fault is set, the frequency returned will be based on the
 //! fail safe mechanism of CS module. The user of this API must ensure that
-//! CS_externalClockSourceInit API was invoked before in case XT1 or XT2 is
+//! CS_externalClockSourceInit API was invoked before in case LFXT or HFXT is
 //! being used.
 //!
 //!
@@ -503,7 +518,7 @@ extern uint32_t CS_getACLK(void);
 //!
 //! If a oscillator fault is set, the frequency returned will be based on the
 //! fail safe mechanism of CS module. The user of this API must ensure that
-//! CS_externalClockSourceInit API was invoked before in case XT1 or XT2 is
+//! CS_externalClockSourceInit API was invoked before in case LFXT or HFXT is
 //! being used.
 //!
 //!
@@ -518,7 +533,7 @@ extern uint32_t CS_getSMCLK(void);
 //!
 //! If a oscillator fault is set, the frequency returned will be based on the
 //! fail safe mechanism of CS module. The user of this API must ensure that
-//! CS_externalClockSourceInit API was invoked before in case XT1 or XT2 is
+//! CS_externalClockSourceInit API was invoked before in case LFXT or HFXT is
 //! being used.
 //!
 //!
@@ -526,6 +541,18 @@ extern uint32_t CS_getSMCLK(void);
 //
 //*****************************************************************************
 extern uint32_t CS_getMCLK(void);
+
+//*****************************************************************************
+//
+//! \brief Turns off VLO
+//!
+//!
+//! Modified bits of \b CSCTL4 register.
+//!
+//! \return None
+//
+//*****************************************************************************
+extern void CS_turnOffVLO(void);
 
 //*****************************************************************************
 //
@@ -545,22 +572,27 @@ extern uint16_t CS_clearAllOscFlagsWithTimeout(uint32_t timeout);
 //
 //! \brief Set DCO frequency
 //!
-//! \param dcorsel selects frequency range option. Valid options are:
-//!        CS_DCORSEL_0 [Default] CS_DCORSEL_1
+//! \param dcorsel selects frequency range option.
 //!        Valid values are:
-//!        - \b CS_DCORSEL_0
-//!        - \b CS_DCORSEL_1
+//!        - \b CS_DCORSEL_0 [Default] - Low Frequency Option
+//!        - \b CS_DCORSEL_1 - High Frequency Option
 //! \param dcofsel selects valid frequency options based on dco frequency range
-//!        selection (dcorsel).
+//!        selection (dcorsel)
 //!        Valid values are:
-//!        - \b CS_DCOFSEL_0 - Low frequency option 5.33MHZ. High frequency
+//!        - \b CS_DCOFSEL_0 - Low frequency option 1MHz. High frequency option
+//!           1MHz.
+//!        - \b CS_DCOFSEL_1 - Low frequency option 2.67MHz. High frequency
+//!           option 5.33MHz.
+//!        - \b CS_DCOFSEL_2 - Low frequency option 3.33MHz. High frequency
+//!           option 6.67MHz.
+//!        - \b CS_DCOFSEL_3 - Low frequency option 4MHz. High frequency option
+//!           8MHz.
+//!        - \b CS_DCOFSEL_4 - Low frequency option 5.33MHz. High frequency
 //!           option 16MHz.
-//!        - \b CS_DCOFSEL_1 - Low frequency option 6.67MHZ. High frequency
+//!        - \b CS_DCOFSEL_5 - Low frequency option 6.67MHz. High frequency
 //!           option 20MHz.
-//!        - \b CS_DCOFSEL_2 - Low frequency option 5.33MHZ. High frequency
-//!           option 16MHz.
-//!        - \b CS_DCOFSEL_3 [Default] - Low frequency option 8MHZ. High
-//!           frequency option 24MHz.
+//!        - \b CS_DCOFSEL_6 - Low frequency option 8MHz. High frequency option
+//!           24MHz.
 //!
 //! \return None
 //

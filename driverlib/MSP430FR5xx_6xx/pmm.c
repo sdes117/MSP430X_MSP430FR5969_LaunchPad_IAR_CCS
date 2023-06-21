@@ -13,24 +13,10 @@
 
 #include "inc/hw_memmap.h"
 
-#ifdef __MSP430_HAS_PMM_FR5xx__
+#ifdef __MSP430_HAS_PMM_FRAM__
 #include "pmm.h"
 
 #include <assert.h>
-
-void PMM_enableSVSL (void)
-{
-    HWREG8(PMM_BASE + OFS_PMMCTL0_H) = PMMPW_H;
-    HWREG8(PMM_BASE + OFS_PMMCTL0) |= SVSLE;
-    HWREG8(PMM_BASE + OFS_PMMCTL0_H) = 0x00;
-}
-
-void PMM_disableSVSL (void)
-{
-    HWREG8(PMM_BASE + OFS_PMMCTL0_H) = PMMPW_H;
-    HWREG8(PMM_BASE + OFS_PMMCTL0) &= ~SVSLE;
-    HWREG8(PMM_BASE + OFS_PMMCTL0_H) = 0x00;
-}
 
 void PMM_enableSVSH (void)
 {

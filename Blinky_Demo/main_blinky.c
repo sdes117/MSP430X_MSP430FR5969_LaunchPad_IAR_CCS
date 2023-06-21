@@ -69,6 +69,7 @@
 
 /* Standard demo includes. */
 #include "partest.h"
+#include "serial.h"
 
 /* TI includes. */
 #include "driverlib.h"
@@ -96,6 +97,25 @@ the queue empty. */
 #define mainTASK_LED						( 0 )
 
 /*-----------------------------------------------------------*/
+/* serial gubbins */
+/* Dimensions the buffer into which input characters are placed. */
+#define cmdMAX_INPUT_SIZE       50
+
+/* Dimentions a buffer to be used by the UART driver, if the UART driver uses a
+buffer at all. */
+#define cmdQUEUE_LENGTH         64
+
+/* DEL acts as a backspace. */
+#define cmdASCII_DEL        ( 0x7F )
+
+/* The maximum time to wait for the mutex that guards the UART to become
+available. */
+#define cmdMAX_MUTEX_WAIT       pdMS_TO_TICKS( 300 )
+
+#ifndef configCLI_BAUD_RATE
+    #define configCLI_BAUD_RATE 115200
+#endif
+/*----------------------------------------------------------*/
 
 typedef enum
 {
@@ -123,7 +143,7 @@ void main_blinky( void );
 static void prvQueueReceiveTask( void *pvParameters );
 static void prvQueueSendTask( void *pvParameters );
 
-uint8_t ADC10_B_getConvertedChannel (uint16_t baseAddress);
+uint8_t ADC12_B_getConvertedChannel (uint16_t baseAddress);
 
 /*-----------------------------------------------------------*/
 
@@ -204,8 +224,8 @@ struct AppMessage msg;
         {
             msg.msgByte = 0;
 		    //Enable and Start the conversion
-            //in Sequence-of-Channel, Single Conversion Mode
-            ADC10_B_startConversion(ADC10_B_BASE, ADC10_B_SEQOFCHANNELS);
+            //in Sequence-of-Channel, Multiple Conversion Mode for channels 15-0:
+            ADC12_B_startConversion(ADC12_B_BASE, ADC12_B_MEMORY_15, ADC12_B_SEQOFCHANNELS);
         }
 
 	}
@@ -216,9 +236,13 @@ static void prvQueueReceiveTask( void *pvParameters )
 {
     struct AppMessage msg;
 //const unsigned long ulExpectedValue = 100UL;
+    xComPortHandle xPort;
 
 	/* Remove compiler warning about unused parameter. */
 	( void ) pvParameters;
+
+    /* Initialise the UART. */
+    xPort = xSerialPortInitMinimal( configCLI_BAUD_RATE, cmdQUEUE_LENGTH );
 
 	for( ;; )
 	{
@@ -237,15 +261,14 @@ static void prvQueueReceiveTask( void *pvParameters )
 
         if( msg.msgID == eADC )
         {
-            /* Store the data */
-            ADCdata[(msg.msgByte+1) & 0xF] = (uint16_t)msg.pvData;
-            /* If it's the last channel, transmit the data */
-            if(msg.msgByte == 15)
-            {
-                /* transmit ADCtime, followed by ADCdata */
-                msg.msgID++;
+            /* (reasonably) unique word for start of packet - a 10/12 bit ADC will not produce this value */
+            const uint16_t preamble = 0xa5a5;
 
-            }
+            /* transmit preamble, then ADCtime, followed by ADCdata */
+            vSerialPutString( xPort, ( signed char * ) &preamble, ( unsigned short ) 2);
+            vSerialPutString( xPort, ( signed char * ) &ADCtime, ( unsigned short ) 2);
+            vSerialPutString( xPort, ( signed char * ) ADCdata, ( unsigned short ) 32 );
+
         }
 
 		if (mcp2515_irq & MCP2515_IRQ_FLAGGED) {
@@ -301,37 +324,46 @@ static void prvQueueReceiveTask( void *pvParameters )
 }
 /*-----------------------------------------------------------*/
 
-uint8_t ADC10_B_getConvertedChannel (uint16_t baseAddress)
+uint8_t ADC12_B_getConvertedChannel (uint16_t baseAddress)
 {
-    return ( HWREG8(baseAddress + OFS_ADC10MCTL0) & 0x0F );
+    /*
+     * Annoyingly, this register returns the channel you are _currently_ converting,
+     * rather than the one you are reading out, so we have to add one (mod 16)
+     * if we are in sequence measurement mode.
+     */
+    return ( (HWREG8(baseAddress + OFS_ADC12MCTL0) + 1) & 0x0F );
 }
 
 
 /**********************************************************************//**
- * @brief  ADC10 ISR
+ * @brief  ADC12 ISR
  *
  * @param  none
  *
  * @return none
  *************************************************************************/
-#pragma vector=ADC10_VECTOR
-__interrupt void ADC10_ISR(void)
+#pragma vector=ADC12_VECTOR
+__interrupt void ADC12_ISR(void)
 {
+    uint8_t channel = 0;
 
-  switch(__even_in_range(ADC10IV,ADC10IV_ADC10IFG))
+  switch(__even_in_range(ADC12IV,12))
   {
-    case ADC10IV_NONE: break;               // No interrupt
-    case ADC10IV_ADC10OVIFG: break;         // conversion result overflow
-    case ADC10IV_ADC10TOVIFG: break;        // conversion time overflow
-    case ADC10IV_ADC10HIIFG: break;         // ADC10HI
-    case ADC10IV_ADC10LOIFG: break;         // ADC10LO
-    case ADC10IV_ADC10INIFG: break;         // ADC10IN
-    case ADC10IV_ADC10IFG:
-        ADCResult.msgID = eADC;
-        ADCResult.msgByte = ADC10_B_getConvertedChannel (ADC10_B_BASE);
-        ADCResult.pvData = (void *)ADC10_B_getResults(ADC10_B_BASE);
-        // now post result to xQueue
-        xQueueSendFromISR( xQueue, &ADCResult, 0U );
+    case ADC12IV_NONE: break;               // No interrupt
+    case ADC12IV_ADC12OVIFG: break;         // conversion result overflow
+    case ADC12IV_ADC12TOVIFG: break;        // conversion time overflow
+    case ADC12IV_ADC12HIIFG: break;         // ADC12HI
+    case ADC12IV_ADC12LOIFG: break;         // ADC12LO
+    case ADC12IV_ADC12INIFG: break;         // ADC12IN
+    case ADC12IV_ADC12IFG0:
+        for(channel = 0; channel < 16; channel++)
+        {
+            ADCdata[channel] = ADC12_B_getResults(ADC12_B_BASE, channel);
+
+            ADCResult.msgID = eADC;
+            // now post result to xQueue
+            xQueueSendFromISR( xQueue, &ADCResult, 0U );
+        }
 
         __bic_SR_register_on_exit(CPUOFF);  //required?
         break;                          // Clear CPUOFF bit from 0(SR)

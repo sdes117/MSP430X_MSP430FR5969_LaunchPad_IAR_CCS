@@ -188,6 +188,20 @@ extern void MPU_initInfoSegment(uint16_t baseAddress,
 
 //*****************************************************************************
 //
+//! \brief The following function enables the NMI Event if a Segment violation
+//! has occurred.
+//!
+//! \param baseAddress is the base address of the MPU module.
+//!
+//! Modified bits of \b MPUCTL0 register.
+//!
+//! \return None
+//
+//*****************************************************************************
+extern void MPU_enableNMIevent(uint16_t baseAddress);
+
+//*****************************************************************************
+//
 //! \brief The following function enables the MPU module in the device.
 //!
 //! This function needs to be called once all memory segmentation has been
@@ -346,6 +360,24 @@ extern uint16_t MPU_clearInterrupt(uint16_t baseAddress,
 //
 //*****************************************************************************
 extern uint16_t MPU_clearAllInterrupts(uint16_t baseAddress);
+
+//*****************************************************************************
+//
+//! \brief Lock MPU to protect from write access.
+//!
+//! Sets MPULOCK to protect MPU from write access on all MPU registers except
+//! MPUCTL1, MPUIPC0 and MPUIPSEGBx until a BOR occurs. MPULOCK bit cannot be
+//! cleared manually. MPU_clearInterrupt() and MPU_clearAllInterrupts() still
+//! can be used after this API is called.
+//!
+//! \param baseAddress is the base address of the MPU module.
+//!
+//! Modified bits are \b MPULOCK of \b MPUCTL1 register.
+//!
+//! \return None
+//
+//*****************************************************************************
+extern void MPU_lockMPU(uint16_t baseAddress);
 
 //*****************************************************************************
 //

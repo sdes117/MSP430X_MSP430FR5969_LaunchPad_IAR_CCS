@@ -9,7 +9,7 @@
 
 #include "inc/hw_memmap.h"
 
-#ifdef __MSP430_HAS_PMM_FR5xx__
+#ifdef __MSP430_HAS_PMM_FRAM__
 
 //*****************************************************************************
 //
@@ -33,39 +33,14 @@ extern "C"
 #define PMM_RST_INTERRUPT                                             PMMRSTIFG
 #define PMM_POR_INTERRUPT                                             PMMPORIFG
 #define PMM_SVSH_INTERRUPT                                              SVSHIFG
-#define PMM_SVSL_INTERRUPT                                              SVSLIFG
 #define PMM_LPM5_INTERRUPT                                           PMMLPM5IFG
-#define PMM_ALL                                                          (0xB7)
+#define PMM_ALL                                                          (0xA7)
 
 //*****************************************************************************
 //
 // Prototypes for the APIs.
 //
 //*****************************************************************************
-
-//*****************************************************************************
-//
-//! \brief Enables the low-side SVS circuitry
-//!
-//!
-//! Modified bits of \b PMMCTL0 register.
-//!
-//! \return None
-//
-//*****************************************************************************
-extern void PMM_enableSVSL(void);
-
-//*****************************************************************************
-//
-//! \brief Disables the low-side SVS circuitry
-//!
-//!
-//! Modified bits of \b PMMCTL0 register.
-//!
-//! \return None
-//
-//*****************************************************************************
-extern void PMM_disableSVSL(void);
 
 //*****************************************************************************
 //
@@ -151,8 +126,6 @@ extern void PMM_trigBOR(void);
 //!        - \b PMM_RST_INTERRUPT - RESET pin interrupt
 //!        - \b PMM_POR_INTERRUPT - Software POR interrupt
 //!        - \b PMM_SVSH_INTERRUPT - SVS high side interrupt
-//!        - \b PMM_SVSL_INTERRUPT - SVS low side interrupt, not available for
-//!           FR58xx/59xx
 //!        - \b PMM_LPM5_INTERRUPT - LPM5 indication
 //!        - \b PMM_ALL - All interrupts
 //!
@@ -173,8 +146,6 @@ extern void PMM_clearInterrupt(uint16_t mask);
 //!        - \b PMM_RST_INTERRUPT - RESET pin interrupt
 //!        - \b PMM_POR_INTERRUPT - Software POR interrupt
 //!        - \b PMM_SVSH_INTERRUPT - SVS high side interrupt
-//!        - \b PMM_SVSL_INTERRUPT - SVS low side interrupt, not available for
-//!           FR58xx/59xx
 //!        - \b PMM_LPM5_INTERRUPT - LPM5 indication
 //!        - \b PMM_ALL - All interrupts
 //!
@@ -183,8 +154,6 @@ extern void PMM_clearInterrupt(uint16_t mask);
 //!         - \b PMM_RST_INTERRUPT RESET pin interrupt
 //!         - \b PMM_POR_INTERRUPT Software POR interrupt
 //!         - \b PMM_SVSH_INTERRUPT SVS high side interrupt
-//!         - \b PMM_SVSL_INTERRUPT SVS low side interrupt, not available for
-//!         FR58xx/59xx
 //!         - \b PMM_LPM5_INTERRUPT LPM5 indication
 //!         - \b PMM_ALL All interrupts
 //!         \n indicating  the status of the selected  interrupt flags

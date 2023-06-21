@@ -31,6 +31,11 @@
 			<locationURI>FREERTOS_ROOT/FreeRTOS/Source</locationURI>
 		</link>
 		<link>
+			<name>driverlib.h</name>
+			<type>1</type>
+			<locationURI>PARENT-3-CCS_BASE_ROOT/msp430ware_3_80_14_01/driverlib/driverlib/MSP430FR5xx_6xx/driverlib.h</locationURI>
+		</link>
+		<link>
 			<name>mcp2515.c</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/Users/FAF02/ti/workspace_v12/mcp2515-master/msp430/mcp2515.c</locationURI>
@@ -44,11 +49,6 @@
 			<name>msp430_spi.c</name>
 			<type>1</type>
 			<locationURI>PARENT-4-PROJECT_LOC/Users/FAF02/ti/workspace_v12/mcp2515-master/msp430/msp430_spi.c</locationURI>
-		</link>
-		<link>
-			<name>msp430_spi.h</name>
-			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/Users/FAF02/ti/workspace_v12/mcp2515-master/msp430/msp430_spi.h</locationURI>
 		</link>
 		<link>
 			<name>Full_Demo/FreeRTOS+CLI</name>
@@ -78,7 +78,7 @@
 	</linkedResources>
 	<filteredResources>
 		<filter>
-			<id>1674790927897</id>
+			<id>1687224234144</id>
 			<name></name>
 			<type>10</type>
 			<matcher>
