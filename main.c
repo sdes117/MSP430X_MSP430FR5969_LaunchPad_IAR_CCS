@@ -184,7 +184,7 @@ vApplicationSetupTimerInterrupt() generates the tick from timer A0, so in this
 case configTICK_VECTOR is set to TIMER0_A0_VECTOR. */
 void vApplicationSetupTimerInterrupt( void )
 {
-const unsigned long usACLK_Frequency_Hz = 4000000; /* (16MHz XT1)/4 */
+const unsigned long usACLK_Frequency_Hz = 10000 /*10000*/; /* (16MHz XT1)/4 */
 
     /* Ensure the timer is stopped. */
     TA0CTL = 0;
@@ -241,22 +241,26 @@ static void prvSetupHardware( void )
     GPIO_setAsPeripheralModuleFunctionOutputPin( GPIO_PORT_P2, GPIO_PIN5, GPIO_SECONDARY_MODULE_FUNCTION );
     GPIO_setAsPeripheralModuleFunctionInputPin( GPIO_PORT_P2, GPIO_PIN6, GPIO_SECONDARY_MODULE_FUNCTION );
 
-    /* Set PJ.4 and PJ.5 for HFXT. */
-    GPIO_setAsPeripheralModuleFunctionInputPin(  GPIO_PORT_PJ, GPIO_PIN4 + GPIO_PIN5, GPIO_PRIMARY_MODULE_FUNCTION  );
+    /* Set PJ.6 and PJ.7 for HFXT. */
+    GPIO_setAsPeripheralModuleFunctionInputPin(  GPIO_PORT_PJ, GPIO_PIN6 + GPIO_PIN7, GPIO_PRIMARY_MODULE_FUNCTION  );
 
     /* set analog input pins */
     /* A12 = P3.0 = LM335D */
     GPIO_setAsPeripheralModuleFunctionInputPin( GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 , GPIO_TERNARY_MODULE_FUNCTION );
 
     /* Set DCO frequency to 8 MHz. */
-    CS_setDCOFreq( CS_DCORSEL_0, CS_DCOFSEL_3 );
+    CS_setDCOFreq( CS_DCORSEL_0, CS_DCOFSEL_6 );
 
     /* Set external clock frequency to 16.000 MHz. */
-    CS_setExternalClockSource( 16000000, 16000000 );
+    CS_setExternalClockSource( 0, 16000000 );
+
+    /* Start XT1 with no time out. */
+    CS_turnOnHFXT( CS_HFXT_DRIVE_16MHZ_24MHZ );
 
     /* Set ACLK = XT1 with freq divider 4 (gives 4MHz ACLK). */
-    CS_initClockSignal( CS_ACLK, CS_HFXTCLK_SELECT, CS_CLOCK_DIVIDER_4 );
+    CS_initClockSignal( CS_ACLK, CS_VLOCLK_SELECT, CS_CLOCK_DIVIDER_1 );
     // (internal DCO): CS_initClockSignal( CS_ACLK, CS_VLOCLK_SELECT, CS_CLOCK_DIVIDER_1 );
+    //CS_initClockSignal( CS_ACLK, CS_VLOCLK_SELECT, CS_CLOCK_DIVIDER_1 );
 
     /* Set SMCLK = DCO with frequency divider of 1. */
     CS_initClockSignal( CS_SMCLK, CS_DCOCLK_SELECT, CS_CLOCK_DIVIDER_1 );
@@ -265,7 +269,7 @@ static void prvSetupHardware( void )
     CS_initClockSignal( CS_MCLK, CS_DCOCLK_SELECT, CS_CLOCK_DIVIDER_1 );
 
     /* Start XT1 with no time out. */
-    CS_turnOnHFXT( CS_HFXT_DRIVE_16MHZ_24MHZ );
+    //CS_turnOnHFXT( CS_HFXT_DRIVE_16MHZ_24MHZ );
 
     /* Disable the GPIO power-on default high-impedance mode. */
     PMM_unlockLPM5();
@@ -388,7 +392,7 @@ static void prvSetupHardware( void )
 
 #endif /* !5759 */
 
-    __delay_cycles(160000);
+    //__delay_cycles(160000);
     can_init();
     if (can_speed(1000000, 1, 1) < 0) {
         //P1OUT |= BIT0;
