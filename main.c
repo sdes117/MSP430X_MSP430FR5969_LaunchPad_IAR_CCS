@@ -174,8 +174,7 @@ void vApplicationTickHook( void )
 	}
 	#endif
 }
-/* #define TMU (in project compile predefines) for TMU-specifc hardware configuration, otherwise configure for MSP_EXP430FR5739 experimenter board */
-#ifdef TMU
+
 /* The MSP430X port uses this callback function to configure its tick interrupt.
 This allows the application to choose the tick interrupt source.
 configTICK_VECTOR must also be set in FreeRTOSConfig.h to the correct
@@ -211,8 +210,6 @@ const unsigned long usACLK_Frequency_Hz = 10000 /*10000*/; /* (16MHz XT1)/4 */
 
 static void prvSetupHardware( void )
 {
-    uint8_t i;
-
     /* Stop Watchdog timer. */
     WDT_A_hold( __MSP430_BASEADDRESS_WDT_A__ );
 
@@ -221,15 +218,13 @@ static void prvSetupHardware( void )
     GPIO_setOutputLowOnPin( GPIO_PORT_P2, GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN7 );
     GPIO_setOutputHighOnPin( GPIO_PORT_P2, GPIO_PIN0 ); /* UCA0TXD */
     GPIO_setOutputLowOnPin( GPIO_PORT_P3, GPIO_PIN6 | GPIO_PIN7 );
-    // no port 4: GPIO_setOutputLowOnPin( GPIO_PORT_P4, GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7 );
-    //GPIO_setOutputLowOnPin( GPIO_PORT_PJ, GPIO_PIN0 );
 
     GPIO_setAsOutputPin( GPIO_PORT_P1, GPIO_PIN6 | GPIO_PIN7 );
     GPIO_setAsOutputPin( GPIO_PORT_P2, GPIO_PIN0 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN7 );
     GPIO_setAsOutputPin( GPIO_PORT_P3, GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7 );
-    // GPIO_setAsOutputPin( GPIO_PORT_P4, GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7 );
-    // VGL - not needed?: GPIO_setAsOutputPin( GPIO_PORT_PJ, GPIO_PIN0  );
 
+    // P2.2 is MCP2510 CAN interrupt.
+    GPIO_setAsInputPin( GPIO_PORT_P2, GPIO_PIN2 );
     //GPIO_setAsInputPin( GPIO_PORT_PJ, GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 ); /* JTAG inputs */
 
     /* Configure P2.0 - UCA0TXD and P2.1 - UCA0RXD. - TODO: configure as SPI1 I/O for dragsail MC */
@@ -254,22 +249,17 @@ static void prvSetupHardware( void )
     /* Set external clock frequency to 16.000 MHz. */
     CS_setExternalClockSource( 0, 16000000 );
 
-    /* Start XT1 with no time out. */
-    CS_turnOnHFXT( CS_HFXT_DRIVE_16MHZ_24MHZ );
-
-    /* Set ACLK = XT1 with freq divider 4 (gives 4MHz ACLK). */
+    /* Set ACLK = VLOCLK (gives ~10 kHz ACLK). */
     CS_initClockSignal( CS_ACLK, CS_VLOCLK_SELECT, CS_CLOCK_DIVIDER_1 );
-    // (internal DCO): CS_initClockSignal( CS_ACLK, CS_VLOCLK_SELECT, CS_CLOCK_DIVIDER_1 );
-    //CS_initClockSignal( CS_ACLK, CS_VLOCLK_SELECT, CS_CLOCK_DIVIDER_1 );
 
-    /* Set SMCLK = DCO with frequency divider of 1. */
-    CS_initClockSignal( CS_SMCLK, CS_DCOCLK_SELECT, CS_CLOCK_DIVIDER_1 );
+    /* Set SMCLK = HFXT with frequency divider of 2 => 8MHz. */
+    CS_initClockSignal( CS_SMCLK, CS_HFXTCLK_SELECT, CS_CLOCK_DIVIDER_2 );
 
-    /* Set MCLK = DCO with frequency divider of 1. */
-    CS_initClockSignal( CS_MCLK, CS_DCOCLK_SELECT, CS_CLOCK_DIVIDER_1 );
+    /* Set MCLK = HFXT with frequency divider of 2 => 8MHz. */
+    CS_initClockSignal( CS_MCLK, CS_HFXTCLK_SELECT, CS_CLOCK_DIVIDER_2 );
 
-    /* Start XT1 with no time out. */
-    //CS_turnOnHFXT( CS_HFXT_DRIVE_16MHZ_24MHZ );
+    /* Start HFXT with no time out. */
+    CS_turnOnHFXT( CS_HFXT_DRIVE_16MHZ_24MHZ );
 
     /* Disable the GPIO power-on default high-impedance mode. */
     PMM_unlockLPM5();
@@ -285,50 +275,6 @@ static void prvSetupHardware( void )
             GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5,
             GPIO_TERNARY_MODULE_FUNCTION);
 
-#if 0 /* FR5759*/
-    //Initialize the ADC10B Module
-    /*
-     * Base Address for the ADC10B Module
-     * Use internal ADC10B bit as sample/hold signal to start conversion
-     * USE MODOSC 5MHZ Digital Oscillator as clock source
-     * Use default clock divider of 1
-     */
-    ADC12_B_init(ADC12_B_BASE,
-        ADC12_B_SAMPLEHOLDSOURCE_SC,
-        ADC12_B_CLOCKSOURCE_ADC10OSC,
-        ADC12_B_CLOCKDIVIDER_1);
-
-    ADC12_B_enable(ADC12_B_BASE);
-
-    /*
-     * Base Address for the ADC10B Module
-     * Sample/hold for 256 clock cycles (~19.5kHz sampling rate)
-     * Enable Multiple Sampling
-     */
-    ADC12_B_setupSamplingTimer(ADC12_B_BASE,
-        ADC12_B_CYCLEHOLD_256_CYCLES,
-        ADC12_B_MULTIPLESAMPLESENABLE);
-
-    //Configure the Memory Buffer
-    /*
-     * Base Address for the ADC10B Module
-     * Use input A0
-     * Use positive reference of AVcc
-     * Use negative reference of AVss
-     */
-    ADC12_B_configureMemory(ADC12_B_BASE,
-        ADC12_B_INPUT_A15,
-        //ADC12_B_INPUT_A12,
-        ADC12_B_VREFPOS_AVCC,
-        ADC12_B_VREFNEG_AVSS);
-
-    ADC12_B_clearInterrupt(ADC12_B_BASE,
-        ADC10IE0);
-
-    //Enable the Memory Buffer Interrupt
-    ADC12_B_enableInterrupt(ADC12_B_BASE,
-        ADC10IE0);
-#else
     //Initialize the ADC12B Module
     /*
     * Base address of ADC12B Module
@@ -390,9 +336,8 @@ static void prvSetupHardware( void )
       0,
       0);
 
-#endif /* !5759 */
 
-    //__delay_cycles(160000);
+    // Set up CAN
     can_init();
     if (can_speed(1000000, 1, 1) < 0) {
         //P1OUT |= BIT0;
@@ -400,7 +345,7 @@ static void prvSetupHardware( void )
         // TODO - error handling? assert?
     }
 
-    can_rx_setmask(0, 0x00F80000, 1); // csp dest id mask
+    can_rx_setmask(0, 0x00F80000, 1); // CSP Destination ID mask
     can_rx_setfilter(0, 0, ((uint32_t)CSP_ID << 19));
     can_rx_setfilter(0, 1, 0x0000000F);
 
@@ -410,102 +355,12 @@ static void prvSetupHardware( void )
     can_rx_setfilter(1, 2, 0x00000000);
     can_rx_setfilter(1, 3, 0x00000000);
 
-    can_rx_mode(0, MCP2515_RXB0CTRL_MODE_RECV_STD_OR_EXT);
-    //can_rx_mode(0, MCP2515_RXB0CTRL_MODE_RECV_ALL);
+    // Extended frames only
+    can_rx_mode(0, MCP2515_RXB0CTRL_MODE_RECV_EXT);
 
     can_ioctl(MCP2515_OPTION_LOOPBACK, 0);
-    //can_ioctl(MCP2515_OPTION_ONESHOT, 1);
-
-    for (i=0; i < 16; i++)
-        can_r_reg(i * 16, buf2, 16);
 
 }
-/*-----------------------------------------------------------*/
-
-#else
-
-/* The MSP430X port uses this callback function to configure its tick interrupt.
-This allows the application to choose the tick interrupt source.
-configTICK_VECTOR must also be set in FreeRTOSConfig.h to the correct
-interrupt vector for the chosen tick interrupt source.  This implementation of
-vApplicationSetupTimerInterrupt() generates the tick from timer A0, so in this
-case configTICK_VECTOR is set to TIMER0_A0_VECTOR. */
-void vApplicationSetupTimerInterrupt( void )
-{
-const unsigned short usACLK_Frequency_Hz = 12500;
-
-    /* Ensure the timer is stopped. */
-    TA0CTL = 0;
-
-    /* Run the timer from the ACLK. */
-    TA0CTL = TASSEL_1;
-
-    /* Clear everything to start with. */
-    TA0CTL |= TACLR;
-
-    /* Set the compare match value according to the tick rate we want. */
-    TA0CCR0 = usACLK_Frequency_Hz / configTICK_RATE_HZ;
-
-    /* Enable the interrupts. */
-    TA0CCTL0 = CCIE;
-
-    /* Start up clean. */
-    TA0CTL |= TACLR;
-
-    /* Up mode. */
-    TA0CTL |= MC_1;
-}
-/*-----------------------------------------------------------*/
-
-static void prvSetupHardware( void )
-{
-    /* Stop Watchdog timer. */
-    WDT_A_hold( __MSP430_BASEADDRESS_WDT_A__ );
-
-    /* Set all GPIO pins to output and low. */
-    GPIO_setOutputLowOnPin( GPIO_PORT_P1, GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7 );
-    GPIO_setOutputLowOnPin( GPIO_PORT_P2, GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7 );
-    GPIO_setOutputLowOnPin( GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7 );
-    GPIO_setOutputLowOnPin( GPIO_PORT_P4, GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7 );
-    GPIO_setOutputLowOnPin( GPIO_PORT_PJ, GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7 | GPIO_PIN8 | GPIO_PIN9 | GPIO_PIN10 | GPIO_PIN11 | GPIO_PIN12 | GPIO_PIN13 | GPIO_PIN14 | GPIO_PIN15 );
-    GPIO_setAsOutputPin( GPIO_PORT_P1, GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7 );
-    GPIO_setAsOutputPin( GPIO_PORT_P2, GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7 );
-    GPIO_setAsOutputPin( GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7 );
-    GPIO_setAsOutputPin( GPIO_PORT_P4, GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7 );
-    GPIO_setAsOutputPin( GPIO_PORT_PJ, GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7 | GPIO_PIN8 | GPIO_PIN9 | GPIO_PIN10 | GPIO_PIN11 | GPIO_PIN12 | GPIO_PIN13 | GPIO_PIN14 | GPIO_PIN15 );
-
-    /* Configure P2.0 - UCA0TXD and P2.1 - UCA0RXD. */
-    GPIO_setOutputLowOnPin( GPIO_PORT_P2, GPIO_PIN0 );
-    GPIO_setAsOutputPin( GPIO_PORT_P2, GPIO_PIN0 );
-    GPIO_setAsPeripheralModuleFunctionInputPin( GPIO_PORT_P2, GPIO_PIN1, GPIO_SECONDARY_MODULE_FUNCTION );
-    GPIO_setAsPeripheralModuleFunctionOutputPin( GPIO_PORT_P2, GPIO_PIN0, GPIO_SECONDARY_MODULE_FUNCTION );
-
-    /* Set PJ.4 and PJ.5 for LFXT. */
-    //GPIO_setAsPeripheralModuleFunctionInputPin(  GPIO_PORT_PJ, GPIO_PIN4 + GPIO_PIN5, GPIO_PRIMARY_MODULE_FUNCTION  );
-
-    /* Set DCO frequency to 8 MHz. */
-    CS_setDCOFreq( CS_DCORSEL_0, CS_DCOFSEL_3 );
-
-    /* Set external clock frequency to 32.768 KHz. */
-    //CS_setExternalClockSource( 32768, 0 );
-
-    /* Set ACLK = VLO with freq divider TBD. */
-    // VGL CS_initClockSignal( CS_ACLK, CS_LFXTCLK_SELECT, CS_CLOCK_DIVIDER_1 );
-    CS_initClockSignal( CS_ACLK, CS_VLOCLK_SELECT, CS_CLOCK_DIVIDER_1 );
-
-    /* Set SMCLK = DCO with frequency divider of 1. */
-    CS_initClockSignal( CS_SMCLK, CS_DCOCLK_SELECT, CS_CLOCK_DIVIDER_1 );
-
-    /* Set MCLK = DCO with frequency divider of 1. */
-    CS_initClockSignal( CS_MCLK, CS_DCOCLK_SELECT, CS_CLOCK_DIVIDER_1 );
-
-    /* Start XT1 with no time out. */
-    // VGL CS_turnOnLFXT( CS_LFXT_DRIVE_0 );
-
-    /* Disable the GPIO power-on default high-impedance mode. */
-    PMM_unlockLPM5();
-}
-#endif
 
 /*-----------------------------------------------------------*/
 
