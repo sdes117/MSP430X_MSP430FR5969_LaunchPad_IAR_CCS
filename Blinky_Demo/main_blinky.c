@@ -221,7 +221,7 @@ struct AppMessage msg;
         {
             msg.msgByte = 0;
 		    /* Enable and Start Sequence-of-Channel, Multiple Conversion Mode for channels 15-0: */
-            ADC12_B_startConversion(ADC12_B_BASE, ADC12_B_MEMORY_15, ADC12_B_SEQOFCHANNELS);
+            ADC12_B_startConversion(ADC12_B_BASE, ADC12_B_START_AT_ADC12MEM0, ADC12_B_SEQOFCHANNELS);
         }
 
 	}
@@ -329,7 +329,8 @@ __interrupt void ADC12_ISR(void)
     case ADC12IV_ADC12HIIFG: break;         // ADC12HI
     case ADC12IV_ADC12LOIFG: break;         // ADC12LO
     case ADC12IV_ADC12INIFG: break;         // ADC12IN
-    case ADC12IV_ADC12IFG0:
+    //case ADC12IV_ADC12IFG0:
+    case ADC12IV_ADC12IFG15:
         for(channel = 0; channel < 16; channel++)
         {
             /* 2*channel as reading 16-bit value with 8-bit offset */

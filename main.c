@@ -210,6 +210,8 @@ const unsigned long usACLK_Frequency_Hz = 10000 /*10000*/; /* (16MHz XT1)/4 */
 
 static void prvSetupHardware( void )
 {
+    uint8_t i;
+
     /* Stop Watchdog timer. */
     WDT_A_hold( __MSP430_BASEADDRESS_WDT_A__ );
 
@@ -289,6 +291,7 @@ static void prvSetupHardware( void )
     initParam.clockSourceDivider = ADC12_B_CLOCKDIVIDER_1;
     initParam.clockSourcePredivider = ADC12_B_CLOCKPREDIVIDER__1;
     initParam.internalChannelMap = ADC12_B_NOINTCH;
+
     ADC12_B_init(ADC12_B_BASE, &initParam);
 
     //Enable the ADC12B module
@@ -309,30 +312,39 @@ static void prvSetupHardware( void )
     /*
     * Base address of the ADC12B Module
     * Configure memory buffer 0
-    * Map input A1 to memory buffer 0
+    * Map inputs A0-A15 to memory buffers 0-15,
     * Vref+ = AVcc
     * Vref- = AVss
-    * Memory buffer 0 is not the end of a sequence
+    * Memory buffer 15 is the end of a sequence
     */
-    /* VGL: TODO */
+    /* VGL: TODO - include internal temp reference, concatenate channels */
     ADC12_B_configureMemoryParam configureMemoryParam = {0};
-    configureMemoryParam.memoryBufferControlIndex = ADC12_B_MEMORY_0;
-    configureMemoryParam.inputSourceSelect = ADC12_B_INPUT_A0;
+
     configureMemoryParam.refVoltageSourceSelect = ADC12_B_VREFPOS_AVCC_VREFNEG_VSS;
-    configureMemoryParam.endOfSequence = ADC12_B_ENDOFSEQUENCE;
+    configureMemoryParam.endOfSequence = ADC12_B_NOTENDOFSEQUENCE;
     configureMemoryParam.windowComparatorSelect = ADC12_B_WINDOW_COMPARATOR_DISABLE;
     configureMemoryParam.differentialModeSelect = ADC12_B_DIFFERENTIAL_MODE_DISABLE;
-    ADC12_B_configureMemory(ADC12_B_BASE, &configureMemoryParam);
 
+    for(i=0; i<15; i++) {
+
+        configureMemoryParam.memoryBufferControlIndex = 2*i; /* 16-bit data */
+        configureMemoryParam.inputSourceSelect = i;
+        ADC12_B_configureMemory(ADC12_B_BASE, &configureMemoryParam);
+    }
+
+    configureMemoryParam.endOfSequence = ADC12_B_ENDOFSEQUENCE;
+    configureMemoryParam.memoryBufferControlIndex = ADC12_B_MEMORY_15;
+    configureMemoryParam.inputSourceSelect = ADC12_B_INPUT_A15;
+    ADC12_B_configureMemory(ADC12_B_BASE, &configureMemoryParam);
 
     ADC12_B_clearInterrupt(ADC12_B_BASE,
         0,
-        ADC12_B_IFG0
+        ADC12_B_IFG15
         );
 
     //Enable memory buffer 0 interrupt
     ADC12_B_enableInterrupt(ADC12_B_BASE,
-      ADC12_B_IE0,
+      ADC12_B_IE15,
       0,
       0);
 
