@@ -9,5 +9,10 @@
 #define MISSION_H_
 
 #define CSP_ID   15
+#define PC_CSP_ID 6
+
+#define CSP_BUFF_PORT 20
+#define PC_BUFF_PORT 26
+
 
 #endif /* MISSION_H_ */

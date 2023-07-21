@@ -79,6 +79,9 @@
 #include "mcp2515.h"
 
 #include "mission.h"
+#include <csp/csp.h>
+#include <csp/drivers/can_socketcan.h>
+#include <csp/interfaces/csp_if_can.h>
 
 /* Priorities at which the tasks are created. */
 #define mainQUEUE_RECEIVE_TASK_PRIORITY		( tskIDLE_PRIORITY + 2 )
@@ -136,38 +139,84 @@ struct AppMessage
  * main.c.
  */
 void main_blinky( void );
+void can_tx_next_packet(BaseType_t *ptask_woken);
+
 
 /*
  * The tasks as described in the comments at the top of this file.
  */
 static void prvQueueReceiveTask( void *pvParameters );
 static void prvQueueSendTask( void *pvParameters );
+static void prvCanTask( void *pvParameters );
 
 /*-----------------------------------------------------------*/
 
 /* The queue used by both tasks. */
 static QueueHandle_t xQueue = NULL;
+static QueueHandle_t xCanQueue = NULL;
 
 struct AppMessage ADCResult = {0};
 struct AppMessage CANflag = {0};
 
 uint32_t rid;
+uint32_t ridbuf[4];
+uint8_t nirq = 0;
 uint8_t mext;
+uint8_t eflag;
 uint8_t irq, buf[8];
 uint16_t ADCdata[16];
 uint32_t ADCtime;
+uint8_t rxcount = 0;
+uint8_t txcount = 0;
+uint8_t wakecount = 0;
+uint8_t errorcount = 0;
+
+csp_iface_t * default_interface = NULL;
+csp_conn_t *conn = NULL;
 
 
 /*-----------------------------------------------------------*/
 
 void main_blinky( void )
 {
+    int error;
+    csp_conf_t conf;
+
+    csp_conf_get_defaults(&conf);
+
+    conf.address = CSP_ID;
+    conf.hostname = "hostname";
+    conf.model = "tmu";
+    conf.revision = "revision";
+    conf.conn_max = 2;
+    conf.conn_queue_length = 4;
+    conf.fifo_length = 4;
+    conf.port_max_bind = 24;
+    conf.rdp_max_window = 20;
+    conf.buffers = 10;
+    conf.buffer_data_size = 256;
+    conf.conn_dfl_so = CSP_O_NONE;
+
+    /* initialise CSP */
+    csp_init(&conf);
+
+    error = csp_can_socketcan_open_and_add_interface("/dev/can", CSP_IF_CAN_DEFAULT_NAME, 0, false, &default_interface);
+    if(error != CSP_ERR_NONE) {
+        /* complain! */
+        //csp_print("Error %d opening CAN interface", error);
+    }
+
+    csp_rtable_set(0, 0, default_interface, CSP_NO_VIA_ADDRESS);
+
 	/* Create the queue. */
     //xQueue = xQueueCreate( mainQUEUE_LENGTH, sizeof( uint32_t ) );
     xQueue = xQueueCreate( mainQUEUE_LENGTH, sizeof( struct AppMessage ) );
+    xCanQueue = xQueueCreate( 8, sizeof( struct AppMessage ) );
 
 	if( xQueue != NULL )
 	{
+	    csp_route_start_task(configMINIMAL_STACK_SIZE,CSP_PRIO_NORM);
+
 		/* Start the two tasks as described in the comments at the top of this
 		file. */
 		xTaskCreate( prvQueueReceiveTask,				/* The function that implements the task. */
@@ -178,6 +227,8 @@ void main_blinky( void )
 					NULL );								/* The task handle is not required, so NULL is passed. */
 
 		xTaskCreate( prvQueueSendTask, "TX", configMINIMAL_STACK_SIZE, NULL, mainQUEUE_SEND_TASK_PRIORITY, NULL );
+
+        xTaskCreate( prvCanTask, "CN", configMINIMAL_STACK_SIZE, NULL, mainQUEUE_RECEIVE_TASK_PRIORITY+1, NULL ); // highest priority
 
 		/* Start the tasks and timer running. */
 		vTaskStartScheduler();
@@ -231,23 +282,28 @@ struct AppMessage msg;
 static void prvQueueReceiveTask( void *pvParameters )
 {
     struct AppMessage msg;
-    xComPortHandle xPort;
+    csp_packet_t * packet;
+    csp_socket_t *sock = csp_socket(CSP_SO_NONE);
+    csp_conn_t *conn;
 
-	/* Remove compiler warning about unused parameter. */
-	( void ) pvParameters;
+    /* Remove compiler warning about unused parameter. */
+    ( void ) pvParameters;
 
-    /* Initialise the UART. */
-    xPort = xSerialPortInitMinimal( configCLI_BAUD_RATE, cmdQUEUE_LENGTH );
+    /* Bind socket to all ports, e.g. all incoming connections will be handled here */
+    csp_bind(sock, CSP_ANY);
 
-	for( ;; )
-	{
-		/* Wait until something arrives in the queue - this task will block
-		indefinitely provided INCLUDE_vTaskSuspend is set to 1 in
-		FreeRTOSConfig.h. */
-		xQueueReceive( xQueue, &msg, portMAX_DELAY );
+    /* Create a backlog of 10 connections, i.e. up to 10 new connections can be queued */
+    csp_listen(sock, 10);
 
-		/*  To get here something must have been received from the queue, but
-		is it the expected value?  If it is, toggle the LED. */
+    for( ;; )
+    {
+        /* Wait until something arrives in the queue - this task will block
+        indefinitely provided INCLUDE_vTaskSuspend is set to 1 in
+        FreeRTOSConfig.h. */
+        xQueueReceive( xQueue, &msg, portMAX_DELAY );
+
+        /*  To get here something must have been received from the queue, but
+        is it the expected value?  If it is, toggle the LED. */
         if( msg.msgID == eTimer )
         {
             vParTestToggleLED( mainTASK_LED );
@@ -256,58 +312,106 @@ static void prvQueueReceiveTask( void *pvParameters )
 
         if( msg.msgID == eADC )
         {
-            /* (reasonably) unique word for start of packet - a 10/12 bit ADC will not produce this value */
-            const uint16_t preamble = 0xa5a5;
+            packet = csp_buffer_get(0);
 
-            /* transmit preamble, then ADCtime, followed by ADCdata */
-            vSerialPutString( xPort, ( signed char * ) &preamble, ( unsigned short ) 2);
-            vSerialPutString( xPort, ( signed char * ) &ADCtime, ( unsigned short ) 2);
-            vSerialPutString( xPort, ( signed char * ) ADCdata, ( unsigned short ) 32 );
+            if(packet != NULL ) {
+                /* copy ADCtime, followed by ADCdata */
+                memcpy(packet->data, &ADCtime, 2); // TODO - make ADCtime 32-bit
+                memcpy(&(packet->data[2]),ADCdata, 32);
+                packet->length = 34;
 
-        }
-
-		if (mcp2515_irq & MCP2515_IRQ_FLAGGED) {
-            int i;
-            irq = can_irq_handler();
-            if (irq & MCP2515_IRQ_RX && !(irq & MCP2515_IRQ_ERROR)) {
-                i = can_recv(&rid, &mext, buf);
-                if (i > 0) {
-                    if (mext) {
-                        /* TODO: replace the following with CSP CAN packet handling when we have room */
-                        /* decode the CSP packet */
-                        uint32_t src, dest;
-                        uint16_t pri, sp, dp;
-
-                        src  = (rid & 0x1F000000) >> 24;
-                        dest = (rid & 0x00F80000) >> 19;
-                        pri  = (buf[0] & 0xc0) >> 6;
-                        dp   = (buf[1] & 0xf) << 2 | (buf[2] & 0xc0) >> 6;
-                        sp   = (buf[2] & 0x3f);
-
-                        if ((i == 6) && (dest == CSP_ID) && (dp == 1)) {
-
-                            /* ping request - send response (note this only responds to a ping of payload size zero) */
-                            buf[0] = pri << 6 | dest << 1 | (src & 0x10) >> 4;
-                            buf[1] = (src & 0xf) << 4 | sp >> 2;
-                            buf[2] = (sp & 0x3) << 6 | dp;
-
-                            can_send(((dest<<24) |(src<<19)), 1, buf, i, 3);
-                        }
+                if((conn = csp_connect(CSP_PRIO_NORM, PC_CSP_ID, PC_BUFF_PORT, 0, CSP_SO_NONE)) != NULL) {
+                    // send to PC, 3000ms timeout
+                    if( csp_send(conn, packet, 3000) != CSP_ERR_NONE) {
+                        csp_buffer_free(packet);
                     }
+                    can_tx_next_packet(NULL);
+                    csp_close(conn);
                 }
-            } else if (irq & MCP2515_IRQ_ERROR) {
-                can_r_reg(MCP2515_CANINTF, &mext, 1);
-                can_r_reg(MCP2515_EFLG, &mext, 1);
-                // TODO  -assert?
             }
         }
 
-        if ( !(mcp2515_irq & MCP2515_IRQ_FLAGGED) ) {
-            //P1OUT ^= BIT0;
-            // TODO: LPM3;
+        /* Test for a new connection, 0 mS timeout */
+        if ((conn = csp_accept(sock, 0)) != NULL) {
+            /* handle connection */
+            packet = csp_read(conn, 0);
+            if (packet != NULL) {
+                /* handle the CSP packet */
+                switch(packet->id.dport){
+                    case 9:
+                        // todo
+                        csp_buffer_free(packet);
+                        break;
+
+                    default:
+                        csp_service_handler(conn, packet);
+                        break;
+                }
+            }
+            csp_close(conn);
         }
-	}
+    }
 }
+
+static void prvCanTask( void *pvParameters )
+{
+    struct AppMessage msg;
+
+    /* Remove compiler warning about unused parameter. */
+    ( void ) pvParameters;
+
+    for( ;; )
+    {
+        /* Wait until something arrives in the queue - this task will block
+        indefinitely provided INCLUDE_vTaskSuspend is set to 1 in
+        FreeRTOSConfig.h. */
+        xQueueReceive( xCanQueue, &msg, portMAX_DELAY /* pdMS_TO_TICKS( 100 )*/ );
+
+        if (mcp2515_irq & MCP2515_IRQ_FLAGGED) {
+            int i;
+            //irq = can_irq_handler();
+            while( (irq = can_irq_handler()) != 0) {
+                if (irq & MCP2515_IRQ_RX /*&& !(irq & MCP2515_IRQ_ERROR)*/) {
+                    i = can_recv(&rid, &mext, buf);
+                    if (i >= 0) {
+                        if (mext) {
+
+                            ridbuf[nirq++] = rid;
+                            if(nirq>=4) {
+                            nirq=0;
+                            }
+
+                            /* TODO: replace the following with CSP CAN packet handling when we have room */
+                            /* Call RX callback */
+                            //csp_can_rx(&ctx->iface, frame.can_id, frame.data, frame.can_dlc, NULL);
+                            csp_can_rx(default_interface, rid, buf, i, NULL);
+                        }
+                    }
+                } else if (irq & MCP2515_IRQ_TX /*&& !(irq & MCP2515_IRQ_ERROR)*/ ) {
+                    /* successful transmit complete */
+                    can_tx_next_packet(NULL);
+                } else if (irq & MCP2515_IRQ_ERROR) {
+                    can_r_reg(MCP2515_CANINTF, &mext, 1);
+                    can_r_reg(MCP2515_EFLG, &eflag, 1);
+                    // TODO  -assert? - reset? - handle error?
+                }
+            }
+        }
+
+        if(can_tx_available() == 0 ) {
+            /* able to transmit pending packet */
+            can_tx_next_packet(NULL);
+
+        }
+    }
+}
+
+void can_start_tx(void)
+{
+    // TODO - replace with FreeRTOS task notification (plus task_woken)?
+    xQueueSend( xCanQueue, &CANflag, 0U );
+}
+
 
 /**********************************************************************//**
  * @brief  ADC12 ISR
@@ -350,11 +454,56 @@ __interrupt void ADC12_ISR(void)
 #pragma vector=PORT2_VECTOR
 __interrupt void P2_ISR(void)
 {
+    //BaseType_t task_woken = 0;
+
     if (P2IFG & CAN_IRQ_PORTBIT) {
         P2IFG &= ~CAN_IRQ_PORTBIT;
         mcp2515_irq |= MCP2515_IRQ_FLAGGED;
 
-        xQueueSendFromISR( xQueue, &CANflag, 0U );
+        xQueueSendFromISR( xCanQueue, &CANflag, 0U );
+#if 0 /*(moved back to main loop) */
+//while (mcp2515_irq & MCP2515_IRQ_FLAGGED) {
+        if (mcp2515_irq & MCP2515_IRQ_FLAGGED) {
+            int i;
+            irq = can_irq_handler();
+            if (irq & MCP2515_IRQ_RX /*&& !(irq & MCP2515_IRQ_ERROR) */) {
+                i = can_recv(&rid, &mext, buf);
+                if (i >= 0) {
+                    if (mext) {
+
+                        ridbuf[nirq++] = rid;
+                        if(nirq>=4) {
+                            nirq=0;
+                        }
+
+                        /* TODO: replace the following with CSP CAN packet handling when we have room */
+                        /* Call RX callback */
+                        //csp_can_rx(&ctx->iface, frame.can_id, frame.data, frame.can_dlc, NULL);
+                        csp_can_rx(default_interface, rid, buf, (uint8_t)i, &task_woken);
+                        rxcount++;
+                    }
+                }
+            } else if (irq & MCP2515_IRQ_TX && !(irq & MCP2515_IRQ_ERROR) ) {
+                /* successful transmit complete */
+                can_tx_next_packet(&task_woken);
+                txcount++;
+            } else if ( irq & MCP2515_CANINTF_WAKIF) {
+                // TODO - what?
+                wakecount++;
+            } else if (irq & MCP2515_IRQ_ERROR) {
+                can_r_reg(MCP2515_CANINTF, &mext, 1);
+                can_r_reg(MCP2515_EFLG, &eflag, 1);
+                // TODO  -assert?
+                errorcount++;
+            }
+        }
+
+        if ( !(mcp2515_irq & MCP2515_IRQ_FLAGGED) ) {
+            //P1OUT ^= BIT0;
+            // TODO: LPM3;
+        }
+#endif
+
         //__bic_SR_register_on_exit(LPM3_bits);
         __bic_SR_register_on_exit(CPUOFF);
     }

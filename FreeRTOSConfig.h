@@ -47,7 +47,7 @@ __persistent keyword to be used.  See http://www.freertos.org/a00111.html#heap_4
 #define configCPU_CLOCK_HZ						( 8000000 )
 #define configTICK_RATE_HZ						( 100 ) /* In this non-real time simulated environment the tick frequency has to be at least a multiple of the Win32 tick frequency, and therefore very slow. */
 //vgl #define configTOTAL_HEAP_SIZE                   ( 14 * 1024 )
-#define configTOTAL_HEAP_SIZE                   ( 2 * 1024 )
+#define configTOTAL_HEAP_SIZE                   ( 10 * 1024 )
 #define configMAX_TASK_NAME_LEN					( 15 )
 #define configUSE_TRACE_FACILITY				1
 #define configUSE_16_BIT_TICKS					1 //VGL
@@ -61,6 +61,8 @@ __persistent keyword to be used.  See http://www.freertos.org/a00111.html#heap_4
 #define configUSE_ALTERNATIVE_API				0
 #define configNUM_THREAD_LOCAL_STORAGE_POINTERS	0
 #define configENABLE_BACKWARD_COMPATIBILITY		1
+//#define configSUPPORT_STATIC_ALLOCATION         1
+
 
 /* Hook function related definitions. */
 #define configUSE_TICK_HOOK				1

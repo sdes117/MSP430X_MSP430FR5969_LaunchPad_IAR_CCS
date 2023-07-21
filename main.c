@@ -359,7 +359,7 @@ static void prvSetupHardware( void )
 
     can_rx_setmask(0, 0x00F80000, 1); // CSP Destination ID mask
     can_rx_setfilter(0, 0, ((uint32_t)CSP_ID << 19));
-    can_rx_setfilter(0, 1, 0x0000000F);
+    can_rx_setfilter(0, 1, 0x00000000);
 
     can_rx_setmask(1, 0xFFFFFF0F, 1);
     can_rx_setfilter(1, 0, 0x00000000);
