@@ -82,6 +82,7 @@
 #include <csp/csp.h>
 #include <csp/drivers/can_socketcan.h>
 #include <csp/interfaces/csp_if_can.h>
+#include <csp/arch/csp_time.h>
 
 /* Priorities at which the tasks are created. */
 #define mainQUEUE_RECEIVE_TASK_PRIORITY		( tskIDLE_PRIORITY + 2 )
@@ -118,6 +119,9 @@ available. */
 #ifndef configCLI_BAUD_RATE
     #define configCLI_BAUD_RATE 115200
 #endif
+
+#define MAX_TLM_PACKET_SIZE 48
+
 /*----------------------------------------------------------*/
 
 typedef enum
@@ -127,6 +131,12 @@ typedef enum
     eADC   = 2
 }eMsgType;
 
+typedef enum
+{
+    eSOH_TLM = 0,
+    eAPP_TLM = 1
+}eTlmType;
+
 struct AppMessage
 {
     uint8_t  msgID;
@@ -134,13 +144,16 @@ struct AppMessage
     void    *pvData;
 };
 
+
+extern int frame_tx_count;
+
 /*
  * Called by main when mainCREATE_SIMPLE_BLINKY_DEMO_ONLY is set to 1 in
  * main.c.
  */
 void main_blinky( void );
 void can_tx_next_packet(BaseType_t *ptask_woken);
-
+void handle_csp_tlm_request(csp_conn_t * conn, csp_packet_t * packet);
 
 /*
  * The tasks as described in the comments at the top of this file.
@@ -166,13 +179,24 @@ uint8_t eflag;
 uint8_t irq, buf[8];
 uint16_t ADCdata[16];
 uint32_t ADCtime;
-uint8_t rxcount = 0;
-uint8_t txcount = 0;
 uint8_t wakecount = 0;
 uint8_t errorcount = 0;
+#pragma NOINIT(bootCount)
+uint16_t bootCount;
+#pragma NOINIT(bootCause)
+uint8_t bootCause;
+uint32_t uptime= 0;
+uint32_t wd_timeout = 100;
+uint16_t wd_count = 0;
+uint16_t rx_csp = 0;
+uint16_t tx_csp = 0;
+
+
 
 csp_iface_t * default_interface = NULL;
 csp_conn_t *conn = NULL;
+
+uint8_t tlm_pkt[MAX_TLM_PACKET_SIZE] = {0,};
 
 
 /*-----------------------------------------------------------*/
@@ -196,6 +220,8 @@ void main_blinky( void )
     conf.buffers = 10;
     conf.buffer_data_size = 256;
     conf.conn_dfl_so = CSP_O_NONE;
+
+    ++bootCount;
 
     /* initialise CSP */
     csp_init(&conf);
@@ -265,12 +291,13 @@ struct AppMessage msg;
 		will not block - it shouldn't need to block as the queue should always
 		be empty at this point in the code. */
 		msg.msgID = eTimer;
-		msg.pvData = (void *)xNextWakeTime; /* nb: store time value, not pointer */
+		msg.pvData = 0; //(void *)(xNextWakeTime/configTICK_RATE_HZ); /* nb: store time value, not pointer */
 		xQueueSend( xQueue, &msg, 0U );
 
         if(msg.msgByte++ >= 30)
         {
             msg.msgByte = 0;
+            ADCtime = (xNextWakeTime/configTICK_RATE_HZ); /* note rolls over at 1.x years! */
 		    /* Enable and Start Sequence-of-Channel, Multiple Conversion Mode for channels 15-0: */
             ADC12_B_startConversion(ADC12_B_BASE, ADC12_B_START_AT_ADC12MEM0, ADC12_B_SEQOFCHANNELS);
         }
@@ -307,7 +334,7 @@ static void prvQueueReceiveTask( void *pvParameters )
         if( msg.msgID == eTimer )
         {
             vParTestToggleLED( mainTASK_LED );
-            ADCtime = (uint16_t)msg.pvData;
+            //ADCtime = (uint16_t)msg.pvData;
         }
 
         if( msg.msgID == eADC )
@@ -316,9 +343,14 @@ static void prvQueueReceiveTask( void *pvParameters )
 
             if(packet != NULL ) {
                 /* copy ADCtime, followed by ADCdata */
-                memcpy(packet->data, &ADCtime, 2); // TODO - make ADCtime 32-bit
-                memcpy(&(packet->data[2]),ADCdata, 32);
-                packet->length = 34;
+                packet->data[0] = 'T';
+                packet->data[1] = 'P';
+                packet->data[2] = 'A';
+                packet->data[3] = '1';
+                memcpy(&(packet->data[4]), &ADCtime, 4);
+                packet->data[8] = (uint8_t)eAPP_TLM;
+                memcpy(&(packet->data[9]),ADCdata, 32);
+                packet->length = 41;
 
                 if((conn = csp_connect(CSP_PRIO_NORM, PC_CSP_ID, PC_BUFF_PORT, 0, CSP_SO_NONE)) != NULL) {
                     // send to PC, 3000ms timeout
@@ -336,8 +368,16 @@ static void prvQueueReceiveTask( void *pvParameters )
             /* handle connection */
             packet = csp_read(conn, 0);
             if (packet != NULL) {
+
                 /* handle the CSP packet */
+                ++rx_csp;
+
                 switch(packet->id.dport){
+                case 7:
+                    // CSP tlm request
+                    handle_csp_tlm_request(conn,packet);
+                    break;
+
                     case 9:
                         // todo
                         csp_buffer_free(packet);
@@ -507,6 +547,59 @@ __interrupt void P2_ISR(void)
         //__bic_SR_register_on_exit(LPM3_bits);
         __bic_SR_register_on_exit(CPUOFF);
     }
+}
+
+
+void handle_csp_tlm_request(csp_conn_t * conn, csp_packet_t * packet) {
+    eTlmType packet_type = (eTlmType)packet->data[0];
+    uint32_t tick = csp_get_s();
+
+    switch(packet_type) {
+    case eSOH_TLM:
+        uptime = csp_get_uptime_s();
+        tx_csp = (uint16_t)default_interface->tx;
+        packet->data[0] = (uint8_t)packet_type;
+        packet->data[1] = 'T';
+        packet->data[2] = 'P';
+        packet->data[3] = 'A';
+        packet->data[4] = '1';
+        packet->data[5] = 0; //OK
+        memcpy(&(packet->data[6]), &tick, sizeof(tick));
+        memcpy(&(packet->data[10]),&bootCount, sizeof(bootCount));
+        packet->data[12] = bootCause;
+        memcpy(&(packet->data[13]),&uptime, sizeof(uptime));
+        memcpy(&(packet->data[17]),&wd_timeout, sizeof(wd_timeout));
+        memcpy(&(packet->data[21]),&wd_count, sizeof(wd_count));
+        memcpy(&(packet->data[23]),&rx_csp, sizeof(rx_csp));
+        memcpy(&(packet->data[25]),&tx_csp, sizeof(tx_csp));
+        packet->length = 27;
+        if (!csp_send(conn, packet, 0))
+            csp_buffer_free(packet);
+        break;
+
+    case eAPP_TLM:
+        // send application telemetry
+        //memset();
+        //bzero(tlm_pkt,MAX_TLM_PACKET_SIZE);
+        packet->data[0] = (uint8_t)packet_type;
+        packet->data[1] = 'T';
+        packet->data[2] = 'P';
+        packet->data[3] = 'A';
+        packet->data[4] = '1';
+        packet->data[5] = 0; //OK
+        memcpy(&(packet->data[6]), &ADCtime, 4);
+        memcpy(&(packet->data[10]),ADCdata, 32);
+        packet->length = 42;
+        if (!csp_send(conn, packet, 0))
+            csp_buffer_free(packet);
+        break;
+
+    default:
+        // unhandled tlm type - free packet.
+        csp_buffer_free(packet);
+        break;
+    }
+
 }
 
 

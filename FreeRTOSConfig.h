@@ -50,7 +50,7 @@ __persistent keyword to be used.  See http://www.freertos.org/a00111.html#heap_4
 #define configTOTAL_HEAP_SIZE                   ( 10 * 1024 )
 #define configMAX_TASK_NAME_LEN					( 15 )
 #define configUSE_TRACE_FACILITY				1
-#define configUSE_16_BIT_TICKS					1 //VGL
+#define configUSE_16_BIT_TICKS					0 //VGL
 #define configIDLE_SHOULD_YIELD					1
 #define configUSE_CO_ROUTINES 					0
 #define configUSE_MUTEXES						1
