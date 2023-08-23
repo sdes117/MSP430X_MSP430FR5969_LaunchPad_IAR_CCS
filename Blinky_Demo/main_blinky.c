@@ -90,7 +90,7 @@
 
 /* The rate at which data is sent to the queue.  The 200ms value is converted
 to ticks using the portTICK_PERIOD_MS constant. */
-#define mainQUEUE_SEND_FREQUENCY_MS			( pdMS_TO_TICKS( 500 ) )
+#define mainQUEUE_SEND_FREQUENCY_MS			( pdMS_TO_TICKS( 1000 ) )
 
 /* The number of items the queue can hold.  This is 1 as the receive task
 will remove items as they are added, meaning the send task should always find
@@ -99,26 +99,6 @@ the queue empty. */
 
 /* The LED toggled by the Rx task. */
 #define mainTASK_LED						( 0 )
-
-/*-----------------------------------------------------------*/
-/* serial gubbins */
-/* Dimensions the buffer into which input characters are placed. */
-#define cmdMAX_INPUT_SIZE       50
-
-/* Dimensions a buffer to be used by the UART driver, if the UART driver uses a
-buffer at all. */
-#define cmdQUEUE_LENGTH         64
-
-/* DEL acts as a backspace. */
-#define cmdASCII_DEL        ( 0x7F )
-
-/* The maximum time to wait for the mutex that guards the UART to become
-available. */
-#define cmdMAX_MUTEX_WAIT       pdMS_TO_TICKS( 300 )
-
-#ifndef configCLI_BAUD_RATE
-    #define configCLI_BAUD_RATE 115200
-#endif
 
 #define MAX_TLM_PACKET_SIZE 48
 
@@ -184,9 +164,9 @@ uint8_t errorcount = 0;
 #pragma NOINIT(bootCount)
 uint16_t bootCount;
 #pragma NOINIT(bootCause)
-uint8_t bootCause;
+uint16_t bootCause;
 uint32_t uptime= 0;
-uint32_t wd_timeout = 100;
+uint32_t wd_timeout = 86400;
 uint16_t wd_count = 0;
 uint16_t rx_csp = 0;
 uint16_t tx_csp = 0;
@@ -204,27 +184,7 @@ uint8_t tlm_pkt[MAX_TLM_PACKET_SIZE] = {0,};
 void main_blinky( void )
 {
     int error;
-    csp_conf_t conf;
-
-    csp_conf_get_defaults(&conf);
-
-    conf.address = CSP_ID;
-    conf.hostname = "hostname";
-    conf.model = "tmu";
-    conf.revision = "revision";
-    conf.conn_max = 2;
-    conf.conn_queue_length = 4;
-    conf.fifo_length = 4;
-    conf.port_max_bind = 24;
-    conf.rdp_max_window = 20;
-    conf.buffers = 10;
-    conf.buffer_data_size = 256;
-    conf.conn_dfl_so = CSP_O_NONE;
-
     ++bootCount;
-
-    /* initialise CSP */
-    csp_init(&conf);
 
     error = csp_can_socketcan_open_and_add_interface("/dev/can", CSP_IF_CAN_DEFAULT_NAME, 0, false, &default_interface);
     if(error != CSP_ERR_NONE) {
@@ -343,14 +303,15 @@ static void prvQueueReceiveTask( void *pvParameters )
 
             if(packet != NULL ) {
                 /* copy ADCtime, followed by ADCdata */
-                packet->data[0] = 'T';
-                packet->data[1] = 'P';
-                packet->data[2] = 'A';
-                packet->data[3] = '1';
-                memcpy(&(packet->data[4]), &ADCtime, 4);
-                packet->data[8] = (uint8_t)eAPP_TLM;
-                memcpy(&(packet->data[9]),ADCdata, 32);
-                packet->length = 41;
+                packet->data[0] = eAPP_TLM;
+                packet->data[1] = 0; //OK
+                packet->data[2] = MISSION_ID_0;
+                packet->data[3] = MISSION_ID_1;
+                packet->data[4] = 0;
+                packet->data[5] = CSP_ID;
+                memcpy(&(packet->data[6]), &ADCtime, 4);
+                memcpy(&(packet->data[10]),ADCdata, 22);
+                packet->length = 32;
 
                 if((conn = csp_connect(CSP_PRIO_NORM, PC_CSP_ID, PC_BUFF_PORT, 0, CSP_SO_NONE)) != NULL) {
                     // send to PC, 3000ms timeout
@@ -387,6 +348,7 @@ static void prvQueueReceiveTask( void *pvParameters )
                         csp_service_handler(conn, packet);
                         break;
                 }
+                can_tx_next_packet(NULL);
             }
             csp_close(conn);
         }
@@ -474,8 +436,8 @@ __interrupt void ADC12_ISR(void)
     case ADC12IV_ADC12LOIFG: break;         // ADC12LO
     case ADC12IV_ADC12INIFG: break;         // ADC12IN
     //case ADC12IV_ADC12IFG0:
-    case ADC12IV_ADC12IFG15:
-        for(channel = 0; channel < 16; channel++)
+    case ADC12IV_ADC12IFG10:
+        for(channel = 0; channel < 11; channel++)
         {
             /* 2*channel as reading 16-bit value with 8-bit offset */
             ADCdata[channel] = ADC12_B_getResults(ADC12_B_BASE, 2*channel);
@@ -501,48 +463,6 @@ __interrupt void P2_ISR(void)
         mcp2515_irq |= MCP2515_IRQ_FLAGGED;
 
         xQueueSendFromISR( xCanQueue, &CANflag, 0U );
-#if 0 /*(moved back to main loop) */
-//while (mcp2515_irq & MCP2515_IRQ_FLAGGED) {
-        if (mcp2515_irq & MCP2515_IRQ_FLAGGED) {
-            int i;
-            irq = can_irq_handler();
-            if (irq & MCP2515_IRQ_RX /*&& !(irq & MCP2515_IRQ_ERROR) */) {
-                i = can_recv(&rid, &mext, buf);
-                if (i >= 0) {
-                    if (mext) {
-
-                        ridbuf[nirq++] = rid;
-                        if(nirq>=4) {
-                            nirq=0;
-                        }
-
-                        /* TODO: replace the following with CSP CAN packet handling when we have room */
-                        /* Call RX callback */
-                        //csp_can_rx(&ctx->iface, frame.can_id, frame.data, frame.can_dlc, NULL);
-                        csp_can_rx(default_interface, rid, buf, (uint8_t)i, &task_woken);
-                        rxcount++;
-                    }
-                }
-            } else if (irq & MCP2515_IRQ_TX && !(irq & MCP2515_IRQ_ERROR) ) {
-                /* successful transmit complete */
-                can_tx_next_packet(&task_woken);
-                txcount++;
-            } else if ( irq & MCP2515_CANINTF_WAKIF) {
-                // TODO - what?
-                wakecount++;
-            } else if (irq & MCP2515_IRQ_ERROR) {
-                can_r_reg(MCP2515_CANINTF, &mext, 1);
-                can_r_reg(MCP2515_EFLG, &eflag, 1);
-                // TODO  -assert?
-                errorcount++;
-            }
-        }
-
-        if ( !(mcp2515_irq & MCP2515_IRQ_FLAGGED) ) {
-            //P1OUT ^= BIT0;
-            // TODO: LPM3;
-        }
-#endif
 
         //__bic_SR_register_on_exit(LPM3_bits);
         __bic_SR_register_on_exit(CPUOFF);
@@ -559,20 +479,20 @@ void handle_csp_tlm_request(csp_conn_t * conn, csp_packet_t * packet) {
         uptime = csp_get_uptime_s();
         tx_csp = (uint16_t)default_interface->tx;
         packet->data[0] = (uint8_t)packet_type;
-        packet->data[1] = 'T';
-        packet->data[2] = 'P';
-        packet->data[3] = 'A';
-        packet->data[4] = '1';
-        packet->data[5] = 0; //OK
+        packet->data[1] = 0; //OK
+        packet->data[2] = MISSION_ID_0;
+        packet->data[3] = MISSION_ID_1;
+        packet->data[4] = 0;
+        packet->data[5] = CSP_ID;
         memcpy(&(packet->data[6]), &tick, sizeof(tick));
         memcpy(&(packet->data[10]),&bootCount, sizeof(bootCount));
-        packet->data[12] = bootCause;
-        memcpy(&(packet->data[13]),&uptime, sizeof(uptime));
-        memcpy(&(packet->data[17]),&wd_timeout, sizeof(wd_timeout));
-        memcpy(&(packet->data[21]),&wd_count, sizeof(wd_count));
-        memcpy(&(packet->data[23]),&rx_csp, sizeof(rx_csp));
-        memcpy(&(packet->data[25]),&tx_csp, sizeof(tx_csp));
-        packet->length = 27;
+        memcpy(&(packet->data[12]),&bootCause, sizeof(bootCause));
+        memcpy(&(packet->data[14]),&uptime, sizeof(uptime));
+        memcpy(&(packet->data[18]),&wd_timeout, sizeof(wd_timeout));
+        memcpy(&(packet->data[22]),&wd_count, sizeof(wd_count));
+        memcpy(&(packet->data[24]),&rx_csp, sizeof(rx_csp));
+        memcpy(&(packet->data[26]),&tx_csp, sizeof(tx_csp));
+        packet->length = 28;
         if (!csp_send(conn, packet, 0))
             csp_buffer_free(packet);
         break;
@@ -582,14 +502,14 @@ void handle_csp_tlm_request(csp_conn_t * conn, csp_packet_t * packet) {
         //memset();
         //bzero(tlm_pkt,MAX_TLM_PACKET_SIZE);
         packet->data[0] = (uint8_t)packet_type;
-        packet->data[1] = 'T';
-        packet->data[2] = 'P';
-        packet->data[3] = 'A';
-        packet->data[4] = '1';
-        packet->data[5] = 0; //OK
+        packet->data[1] = 0; //OK
+        packet->data[2] = MISSION_ID_0;
+        packet->data[3] = MISSION_ID_1;
+        packet->data[4] = 0;
+        packet->data[5] = CSP_ID;
         memcpy(&(packet->data[6]), &ADCtime, 4);
-        memcpy(&(packet->data[10]),ADCdata, 32);
-        packet->length = 42;
+        memcpy(&(packet->data[10]),ADCdata, 22);
+        packet->length = 32;
         if (!csp_send(conn, packet, 0))
             csp_buffer_free(packet);
         break;

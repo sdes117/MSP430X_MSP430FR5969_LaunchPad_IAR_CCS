@@ -55,10 +55,13 @@ functionality in an interrupt. */
 
 /* TI includes. */
 #include "driverlib.h"
+#include "ref_a.h"
 
 /* CAN includes */
 #include <msp430.h>
 #include "mcp2515.h"
+
+#include <csp/csp.h>
 
 #include "mission.h"
 
@@ -72,6 +75,11 @@ or 0 to run the more comprehensive test and demo application. */
  * Configure the hardware as necessary to run this demo.
  */
 static void prvSetupHardware( void );
+static void Init_GPIO(void);
+static void Init_Clock(void);
+static void Init_ADC(void);
+static void Init_CSP(void);
+static void Init_CAN(void);
 
 /*
  * main_blinky() is used when mainCREATE_SIMPLE_BLINKY_DEMO_ONLY is set to 1.
@@ -183,19 +191,19 @@ vApplicationSetupTimerInterrupt() generates the tick from timer A0, so in this
 case configTICK_VECTOR is set to TIMER0_A0_VECTOR. */
 void vApplicationSetupTimerInterrupt( void )
 {
-const unsigned long usACLK_Frequency_Hz = 10000 /*10000*/; /* (16MHz XT1)/4 */
+const unsigned long usCLK_Frequency_Hz = 4000000; /* (8MHz SMCLK)/2 */
 
     /* Ensure the timer is stopped. */
     TA0CTL = 0;
 
-    /* Run the timer from the ACLK. */
-    TA0CTL = TASSEL_1;
+    /* Run the timer from SMCLK/2. */
+    TA0CTL = TASSEL_2 | ID__2;
 
     /* Clear everything to start with. */
     TA0CTL |= TACLR;
 
     /* Set the compare match value according to the tick rate we want. */
-    TA0CCR0 = usACLK_Frequency_Hz / configTICK_RATE_HZ;
+    TA0CCR0 = usCLK_Frequency_Hz / configTICK_RATE_HZ;
 
     /* Enable the interrupts. */
     TA0CCTL0 = CCIE;
@@ -210,11 +218,20 @@ const unsigned long usACLK_Frequency_Hz = 10000 /*10000*/; /* (16MHz XT1)/4 */
 
 static void prvSetupHardware( void )
 {
-    uint8_t i;
 
     /* Stop Watchdog timer. */
     WDT_A_hold( __MSP430_BASEADDRESS_WDT_A__ );
 
+    Init_GPIO();
+    Init_Clock();
+    Init_ADC();
+    Init_CSP();
+    Init_CAN();
+
+}
+
+static void Init_GPIO(void)
+{
     /* Set required GPIO pins to output and low. */
     GPIO_setOutputLowOnPin( GPIO_PORT_P1, GPIO_PIN6 | GPIO_PIN7 ); /* I2C */
     GPIO_setOutputLowOnPin( GPIO_PORT_P2, GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN7 );
@@ -245,6 +262,23 @@ static void prvSetupHardware( void )
     /* A12 = P3.0 = LM335D */
     GPIO_setAsPeripheralModuleFunctionInputPin( GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 , GPIO_TERNARY_MODULE_FUNCTION );
 
+    //Set P1.0 - P1.5 as input pins.
+    /*
+     * Select Port 1
+     * Set Pins 0 - 5 as input
+     * Set Ternary module function
+     */
+    GPIO_setAsPeripheralModuleFunctionInputPin(
+            GPIO_PORT_P1,
+            GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5,
+            GPIO_TERNARY_MODULE_FUNCTION);
+
+    /* Disable the GPIO power-on default high-impedance mode. */
+    PMM_unlockLPM5();
+}
+
+static void Init_Clock(void)
+{
     /* Set DCO frequency to 8 MHz. */
     CS_setDCOFreq( CS_DCORSEL_0, CS_DCOFSEL_6 );
 
@@ -262,20 +296,13 @@ static void prvSetupHardware( void )
 
     /* Start HFXT with no time out. */
     CS_turnOnHFXT( CS_HFXT_DRIVE_16MHZ_24MHZ );
+}
 
-    /* Disable the GPIO power-on default high-impedance mode. */
-    PMM_unlockLPM5();
-
-    //Set P1.0 - P1.5 as input pins.
-    /*
-     * Select Port 1
-     * Set Pins 0 - 5 as input
-     * Set Ternary module function
-     */
-    GPIO_setAsPeripheralModuleFunctionInputPin(
-            GPIO_PORT_P1,
-            GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5,
-            GPIO_TERNARY_MODULE_FUNCTION);
+static void Init_ADC(void)
+{
+    /* initialise the reference voltage module */
+    Ref_A_setReferenceVoltage(REF_A_BASE, REF_A_VREF1_2V);
+    Ref_A_enableReferenceVoltage(REF_A_BASE);
 
     //Initialize the ADC12B Module
     /*
@@ -290,7 +317,7 @@ static void prvSetupHardware( void )
     initParam.clockSourceSelect = ADC12_B_CLOCKSOURCE_ADC12OSC;
     initParam.clockSourceDivider = ADC12_B_CLOCKDIVIDER_1;
     initParam.clockSourcePredivider = ADC12_B_CLOCKPREDIVIDER__1;
-    initParam.internalChannelMap = ADC12_B_NOINTCH;
+    initParam.internalChannelMap = ADC12_B_TEMPSENSEMAP | ADC12_B_BATTMAP;
 
     ADC12_B_init(ADC12_B_BASE, &initParam);
 
@@ -325,30 +352,96 @@ static void prvSetupHardware( void )
     configureMemoryParam.windowComparatorSelect = ADC12_B_WINDOW_COMPARATOR_DISABLE;
     configureMemoryParam.differentialModeSelect = ADC12_B_DIFFERENTIAL_MODE_DISABLE;
 
-    for(i=0; i<15; i++) {
+    configureMemoryParam.memoryBufferControlIndex = 0; /* 16-bit data */
+    configureMemoryParam.inputSourceSelect = 0; /* A0 = 0.5Vcc */
+    ADC12_B_configureMemory(ADC12_B_BASE, &configureMemoryParam);
 
-        configureMemoryParam.memoryBufferControlIndex = 2*i; /* 16-bit data */
-        configureMemoryParam.inputSourceSelect = i;
-        ADC12_B_configureMemory(ADC12_B_BASE, &configureMemoryParam);
-    }
+    configureMemoryParam.memoryBufferControlIndex = 2; /* 16-bit data */
+    configureMemoryParam.inputSourceSelect = 3; /* T1 == J4 input (A3) */
+    ADC12_B_configureMemory(ADC12_B_BASE, &configureMemoryParam);
+
+    configureMemoryParam.memoryBufferControlIndex = 4; /* 16-bit data */
+    configureMemoryParam.inputSourceSelect = 4; /* T2 == J5 input (A4) */
+    ADC12_B_configureMemory(ADC12_B_BASE, &configureMemoryParam);
+
+    configureMemoryParam.memoryBufferControlIndex = 6; /* 16-bit data */
+    configureMemoryParam.inputSourceSelect = 5; /* T3 == J6 input (A5) */
+    ADC12_B_configureMemory(ADC12_B_BASE, &configureMemoryParam);
+
+    configureMemoryParam.memoryBufferControlIndex = 8; /* 16-bit data */
+    configureMemoryParam.inputSourceSelect = 6; /* T4 == J7 input (A6) */
+    ADC12_B_configureMemory(ADC12_B_BASE, &configureMemoryParam);
+
+    configureMemoryParam.memoryBufferControlIndex = 10; /* 16-bit data */
+    configureMemoryParam.inputSourceSelect = 13; /* T5 == J8 input (A13) */
+    ADC12_B_configureMemory(ADC12_B_BASE, &configureMemoryParam);
+
+    configureMemoryParam.memoryBufferControlIndex = 12; /* 16-bit data */
+    configureMemoryParam.inputSourceSelect = 14; /* T6 == J9 input (A14) */
+    ADC12_B_configureMemory(ADC12_B_BASE, &configureMemoryParam);
+
+    configureMemoryParam.memoryBufferControlIndex = 14; /* 16-bit data */
+    configureMemoryParam.inputSourceSelect = 15; /* T7 == J10 input (A15) */
+    ADC12_B_configureMemory(ADC12_B_BASE, &configureMemoryParam);
+
+    configureMemoryParam.memoryBufferControlIndex = 16; /* 16-bit data */
+    configureMemoryParam.inputSourceSelect = 12; /* T8 == external LM85 input (A12) */
+    ADC12_B_configureMemory(ADC12_B_BASE, &configureMemoryParam);
+
+    configureMemoryParam.memoryBufferControlIndex = 18; /* 16-bit data */
+    configureMemoryParam.inputSourceSelect = 30; /* T9 == Internal temperature (A30) */
+    configureMemoryParam.refVoltageSourceSelect = ADC12_B_VREFPOS_INTBUF_VREFNEG_VSS; /* use 1.2V Vref */
+    ADC12_B_configureMemory(ADC12_B_BASE, &configureMemoryParam);
 
     configureMemoryParam.endOfSequence = ADC12_B_ENDOFSEQUENCE;
-    configureMemoryParam.memoryBufferControlIndex = ADC12_B_MEMORY_15;
-    configureMemoryParam.inputSourceSelect = ADC12_B_INPUT_A15;
+    configureMemoryParam.memoryBufferControlIndex = 20; /* 16-bit data */
+    configureMemoryParam.inputSourceSelect = 31; /* T10 == Internal AVCC/2 (A31) */
+    configureMemoryParam.refVoltageSourceSelect = ADC12_B_VREFPOS_AVCC_VREFNEG_VSS;
     ADC12_B_configureMemory(ADC12_B_BASE, &configureMemoryParam);
+
+    //configureMemoryParam.endOfSequence = ADC12_B_ENDOFSEQUENCE;
+   // configureMemoryParam.memoryBufferControlIndex = ADC12_B_MEMORY_15;
+    //configureMemoryParam.inputSourceSelect = ADC12_B_INPUT_A15;
+    //ADC12_B_configureMemory(ADC12_B_BASE, &configureMemoryParam);
 
     ADC12_B_clearInterrupt(ADC12_B_BASE,
         0,
-        ADC12_B_IFG15
+        ADC12_B_IFG10
         );
 
     //Enable memory buffer 0 interrupt
     ADC12_B_enableInterrupt(ADC12_B_BASE,
-      ADC12_B_IE15,
+      ADC12_B_IE10,
       0,
       0);
+}
+
+static void Init_CSP(void)
+{
+    csp_conf_t conf;
+
+    csp_conf_get_defaults(&conf);
+
+    conf.address = CSP_ID;
+    conf.hostname = "hostname";
+    conf.model = "tmu";
+    conf.revision = "revision";
+    conf.conn_max = 2;
+    conf.conn_queue_length = 4;
+    conf.fifo_length = 4;
+    conf.port_max_bind = 24;
+    conf.rdp_max_window = 20;
+    conf.buffers = 10;
+    conf.buffer_data_size = 256;
+    conf.conn_dfl_so = CSP_O_NONE;
+
+    /* initialise CSP */
+    csp_init(&conf);
+}
 
 
+static void Init_CAN(void)
+{
     // Set up CAN
     can_init();
     if (can_speed(1000000, 1, 1) < 0) {

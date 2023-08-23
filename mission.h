@@ -8,6 +8,8 @@
 #ifndef MISSION_H_
 #define MISSION_H_
 
+#define MISSION_ID_0 't'
+#define MISSION_ID_1 '1'
 #define CSP_ID   15
 #define PC_CSP_ID 6
 
