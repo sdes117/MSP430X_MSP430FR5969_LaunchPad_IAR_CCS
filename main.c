@@ -339,12 +339,11 @@ static void Init_ADC(void)
     /*
     * Base address of the ADC12B Module
     * Configure memory buffer 0
-    * Map inputs A0-A15 to memory buffers 0-15,
+    * Map desired inputs to memory buffers 0-11,
     * Vref+ = AVcc
     * Vref- = AVss
-    * Memory buffer 15 is the end of a sequence
+    * Memory buffer 10 is the end of a sequence
     */
-    /* VGL: TODO - include internal temp reference, concatenate channels */
     ADC12_B_configureMemoryParam configureMemoryParam = {0};
 
     configureMemoryParam.refVoltageSourceSelect = ADC12_B_VREFPOS_AVCC_VREFNEG_VSS;
@@ -399,17 +398,12 @@ static void Init_ADC(void)
     configureMemoryParam.refVoltageSourceSelect = ADC12_B_VREFPOS_AVCC_VREFNEG_VSS;
     ADC12_B_configureMemory(ADC12_B_BASE, &configureMemoryParam);
 
-    //configureMemoryParam.endOfSequence = ADC12_B_ENDOFSEQUENCE;
-   // configureMemoryParam.memoryBufferControlIndex = ADC12_B_MEMORY_15;
-    //configureMemoryParam.inputSourceSelect = ADC12_B_INPUT_A15;
-    //ADC12_B_configureMemory(ADC12_B_BASE, &configureMemoryParam);
-
     ADC12_B_clearInterrupt(ADC12_B_BASE,
         0,
         ADC12_B_IFG10
         );
 
-    //Enable memory buffer 0 interrupt
+    //Enable memory buffer 10 interrupt
     ADC12_B_enableInterrupt(ADC12_B_BASE,
       ADC12_B_IE10,
       0,

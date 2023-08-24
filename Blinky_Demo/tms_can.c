@@ -128,17 +128,20 @@ void can_tx_next_packet(BaseType_t *ptask_woken)
 
     BaseType_t got_msg;
 
-    if(ptask_woken){
-        got_msg =  xQueueReceiveFromISR( cantxQueue, &frame, ptask_woken);
-    } else {
-        got_msg = xQueueReceive( cantxQueue, &frame, pdMS_TO_TICKS( 300 ));
-    }
+    if(can_tx_available() == 0 ) {
 
-    if(got_msg == pdPASS ){
-        /* got a message to send */
-        if(can_send( frame.can_id, 1, (void *)(frame.data), frame.can_dlc, 3) != -1) {
-            frame_tx_count++;
-            can_start_tx();
+        if(ptask_woken){
+            got_msg =  xQueueReceiveFromISR( cantxQueue, &frame, ptask_woken);
+        } else {
+            got_msg = xQueueReceive( cantxQueue, &frame, 0 /*pdMS_TO_TICKS( 300 )*/ );
+        }
+
+        if(got_msg == pdPASS ){
+            /* got a message to send */
+            if(can_send( frame.can_id, 1, (void *)(frame.data), frame.can_dlc, 3) != -1) {
+                frame_tx_count++;
+                //can_start_tx();
+            }
         }
     }
 }
