@@ -5,4 +5,5 @@
 	<connection value="common/targetdb/connections/TIMSP430-USB.xml"/>
 	<isTargetManual value="false"/>
 	<templateProperties value="id=com.ti.mcu.msp430.driverlib.example_0,products=com.ti.mcu.msp430.driverlib"/>
+	<activeTargetConfiguration value="targetConfigs/MSP430FR5859.ccxml"/>
 </projectOptions>

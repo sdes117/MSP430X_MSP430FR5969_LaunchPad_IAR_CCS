@@ -351,6 +351,10 @@ static void prvQueueReceiveTask( void *pvParameters )
                 }
             }
             vParTestToggleLED( mainTASK_LED );
+            
+            /* Provide WDT pulses on WDT1 (P2.2) and WDT2 (P3.4) */
+            GPIO_toggleOutputOnPin( GPIO_PORT_P2, GPIO_PIN2 );
+            GPIO_toggleOutputOnPin( GPIO_PORT_P3, GPIO_PIN4 );
         }
 
         if( msg.msgID == eADC )
@@ -428,7 +432,7 @@ static void prvCanTask( void *pvParameters )
             int i;
             //irq = can_irq_handler();
             while( (irq = can_irq_handler()) != 0) {
-                if (irq & MCP2515_IRQ_RX /*&& !(irq & MCP2515_IRQ_ERROR)*/) {
+                if (irq & MCP2515_IRQ_RX && !(irq & MCP2515_IRQ_ERROR)) {
                     i = can_recv(&rid, &mext, buf);
                     if (i >= 0) {
                         if (mext) {
@@ -444,7 +448,7 @@ static void prvCanTask( void *pvParameters )
                             csp_can_rx(default_interface, rid, buf, i, NULL);
                         }
                     }
-                } else if (irq & MCP2515_IRQ_TX /*&& !(irq & MCP2515_IRQ_ERROR)*/ ) {
+                } else if (irq & MCP2515_IRQ_TX && !(irq & MCP2515_IRQ_ERROR) ) {
                     /* successful transmit complete */
                     can_tx_next_packet(NULL);
                 } else if (irq & MCP2515_IRQ_ERROR) {

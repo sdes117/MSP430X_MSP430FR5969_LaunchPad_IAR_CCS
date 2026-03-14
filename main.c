@@ -232,47 +232,33 @@ static void prvSetupHardware( void )
 
 static void Init_GPIO(void)
 {
-    /* Set required GPIO pins to output and low. */
-    GPIO_setOutputLowOnPin( GPIO_PORT_P1, GPIO_PIN6 | GPIO_PIN7 ); /* I2C */
-    GPIO_setOutputLowOnPin( GPIO_PORT_P2, GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN7 );
-    GPIO_setOutputHighOnPin( GPIO_PORT_P2, GPIO_PIN0 ); /* UCA0TXD */
-    GPIO_setOutputLowOnPin( GPIO_PORT_P3, GPIO_PIN6 | GPIO_PIN7 );
+    /* Outputs (Default Low) */
+    GPIO_setOutputLowOnPin(GPIO_PORT_P1, GPIO_PIN5); // eFuseB_SHDN
+    GPIO_setOutputLowOnPin(GPIO_PORT_P2, GPIO_PIN4); // RegA_~EN
+    GPIO_setOutputLowOnPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2); // EN_3V3, eFuseA_SHDN
+    GPIO_setOutputLowOnPin(GPIO_PORT_P4, GPIO_PIN4); // RegB_~EN
 
-    GPIO_setAsOutputPin( GPIO_PORT_P1, GPIO_PIN6 | GPIO_PIN7 );
-    GPIO_setAsOutputPin( GPIO_PORT_P2, GPIO_PIN0 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN7 );
-    GPIO_setAsOutputPin( GPIO_PORT_P3, GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7 );
+    /* Outputs (Default High) */
+    GPIO_setOutputHighOnPin(GPIO_PORT_P2, GPIO_PIN6); // RESET for RP2350
 
-    // P2.2 is MCP2510 CAN interrupt.
-    GPIO_setAsInputPin( GPIO_PORT_P2, GPIO_PIN2 );
-    //GPIO_setAsInputPin( GPIO_PORT_PJ, GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 ); /* JTAG inputs */
+    /* Set as Output Pins */
+    GPIO_setAsOutputPin(GPIO_PORT_P1, GPIO_PIN5); //
+    GPIO_setAsOutputPin(GPIO_PORT_P2, GPIO_PIN2 | GPIO_PIN4 | GPIO_PIN6); // P2.2 (WDT1), P2.4, P2.6 
+    GPIO_setAsOutputPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2 | GPIO_PIN4); // P3.0, P3.2, P3.4 (WDT2) 
+    GPIO_setAsOutputPin(GPIO_PORT_P4, GPIO_PIN4);
 
-    /* Configure P2.0 - UCA0TXD and P2.1 - UCA0RXD. - TODO: configure as SPI1 I/O for dragsail MC */
-    GPIO_setAsPeripheralModuleFunctionOutputPin( GPIO_PORT_P2, GPIO_PIN1, GPIO_SECONDARY_MODULE_FUNCTION );
-    GPIO_setAsPeripheralModuleFunctionInputPin( GPIO_PORT_P2, GPIO_PIN0, GPIO_SECONDARY_MODULE_FUNCTION );
-
-    /* Configure P2.5 - UCA1SIMO and P2.6 - UCA1SOMI. */
-    GPIO_setAsPeripheralModuleFunctionOutputPin( GPIO_PORT_P2, GPIO_PIN4, GPIO_SECONDARY_MODULE_FUNCTION );
-    GPIO_setAsPeripheralModuleFunctionOutputPin( GPIO_PORT_P2, GPIO_PIN5, GPIO_SECONDARY_MODULE_FUNCTION );
-    GPIO_setAsPeripheralModuleFunctionInputPin( GPIO_PORT_P2, GPIO_PIN6, GPIO_SECONDARY_MODULE_FUNCTION );
+    /* Inputs */
+    GPIO_setAsInputPin(GPIO_PORT_P1, GPIO_PIN0 | GPIO_PIN1); // RegA_PG, RegB_PG
+    GPIO_setAsInputPin(GPIO_PORT_P2, GPIO_PIN0 | GPIO_PIN1); // eFuseA_~FLT, eFuseB_~FLT
+    GPIO_setAsInputPin(GPIO_PORT_P3, GPIO_PIN1 | GPIO_PIN7); // WDT_RP2MSP2, WDT_RP2MSP1
+    
+    /* I2C Pins */
+    GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_P1, GPIO_PIN6 | GPIO_PIN7, GPIO_SECONDARY_MODULE_FUNCTION); // I2C SDA, SCL
 
     /* Set PJ.6 and PJ.7 for HFXT. */
-    GPIO_setAsPeripheralModuleFunctionInputPin(  GPIO_PORT_PJ, GPIO_PIN6 + GPIO_PIN7, GPIO_PRIMARY_MODULE_FUNCTION  );
+    GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_P1, GPIO_PIN6 | GPIO_PIN7, GPIO_SECONDARY_MODULE_FUNCTION);
 
-    /* set analog input pins */
-    /* A12 = P3.0 = LM335D */
-    GPIO_setAsPeripheralModuleFunctionInputPin( GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 , GPIO_TERNARY_MODULE_FUNCTION );
-
-    //Set P1.0 - P1.5 as input pins.
-    /*
-     * Select Port 1
-     * Set Pins 0 - 5 as input
-     * Set Ternary module function
-     */
-    GPIO_setAsPeripheralModuleFunctionInputPin(
-            GPIO_PORT_P1,
-            GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5,
-            GPIO_TERNARY_MODULE_FUNCTION);
-
+    PM5CTL0 &= ~LOCKLPM5;
     /* Disable the GPIO power-on default high-impedance mode. */
     PMM_unlockLPM5();
 }
