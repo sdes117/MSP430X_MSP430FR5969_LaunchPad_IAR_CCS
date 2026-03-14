@@ -95,6 +95,11 @@
 /* The rate at which data is sent to the queue.  This is fixed at 1000ms to implement the watchdog timer. */
 #define mainQUEUE_SEND_FREQUENCY_MS			( pdMS_TO_TICKS( 1000 ) )
 
+/* WDT pulse periods are in seconds (clock task runs once per second). */
+#define WDT_PULSE_PERIOD_DEFAULT_S          ( 1U )
+/* At 8 MHz MCLK, 8 cycles = 1 us, which exceeds the 500 ns minimum. */
+#define WDT_EDGE_LOW_CYCLES                 ( 8U )
+
 /* The number of items the queue can hold.  This is 1 as the receive task
 will remove items as they are added, meaning the send task should always find
 the queue empty. */
@@ -102,6 +107,7 @@ the queue empty. */
 
 /* The LED toggled by the Rx task. */
 #define mainTASK_LED						( 0 )
+#define mainTASK_LED_2                      ( 1 )
 
 #define MAX_TLM_PACKET_SIZE 48
 
@@ -186,6 +192,9 @@ uint16_t tx_csp = 0;
 uint32_t tlm_period = DEFAULT_TLM_PERIOD;
 uint32_t tlm_duration = 0;
 uint32_t tlm_counter = 0;
+
+volatile uint32_t wdt1_pulse_period_s = WDT_PULSE_PERIOD_DEFAULT_S;
+volatile uint32_t wdt2_pulse_period_s = WDT_PULSE_PERIOD_DEFAULT_S;
 
 csp_iface_t * default_interface = NULL;
 csp_conn_t *conn = NULL;
@@ -312,6 +321,8 @@ static void prvQueueReceiveTask( void *pvParameters )
     csp_packet_t * packet;
     csp_socket_t *sock = csp_socket(CSP_SO_NONE);
     csp_conn_t *conn;
+    uint32_t wdt1_counter = 0;
+    uint32_t wdt2_counter = 0;
 
     /* Remove compiler warning about unused parameter. */
     ( void ) pvParameters;
@@ -351,10 +362,32 @@ static void prvQueueReceiveTask( void *pvParameters )
                 }
             }
             vParTestToggleLED( mainTASK_LED );
-            
-            /* Provide WDT pulses on WDT1 (P2.2) and WDT2 (P3.4) */
-            GPIO_toggleOutputOnPin( GPIO_PORT_P2, GPIO_PIN2 );
-            GPIO_toggleOutputOnPin( GPIO_PORT_P3, GPIO_PIN4 );
+            vParTestToggleLED( mainTASK_LED_2 );
+
+            /* Toggle each WDT output on its own configurable cadence. */
+            if (wdt1_pulse_period_s == 0U)
+            {
+                wdt1_counter = 0;
+            }
+            else if (++wdt1_counter >= wdt1_pulse_period_s)
+            {
+                wdt1_counter = 0;
+                GPIO_setOutputLowOnPin( GPIO_PORT_P2, GPIO_PIN2 );
+                __delay_cycles( WDT_EDGE_LOW_CYCLES );
+                GPIO_setOutputHighOnPin( GPIO_PORT_P2, GPIO_PIN2 );
+            }
+
+            if (wdt2_pulse_period_s == 0U)
+            {
+                wdt2_counter = 0;
+            }
+            else if (++wdt2_counter >= wdt2_pulse_period_s)
+            {
+                wdt2_counter = 0;
+                GPIO_setOutputLowOnPin( GPIO_PORT_P3, GPIO_PIN4 );
+                __delay_cycles( WDT_EDGE_LOW_CYCLES );
+                GPIO_setOutputHighOnPin( GPIO_PORT_P3, GPIO_PIN4 );
+            }
         }
 
         if( msg.msgID == eADC )

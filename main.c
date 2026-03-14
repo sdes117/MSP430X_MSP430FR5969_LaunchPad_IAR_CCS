@@ -233,7 +233,7 @@ static void prvSetupHardware( void )
 static void Init_GPIO(void)
 {
     /* Outputs (Default Low) */
-    GPIO_setOutputLowOnPin(GPIO_PORT_P1, GPIO_PIN5); // eFuseB_SHDN
+    GPIO_setOutputLowOnPin(GPIO_PORT_P1, GPIO_PIN3 | GPIO_PIN5); // LED, eFuseB_SHDN
     GPIO_setOutputLowOnPin(GPIO_PORT_P2, GPIO_PIN4); // RegA_~EN
     GPIO_setOutputLowOnPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2); // EN_3V3, eFuseA_SHDN
     GPIO_setOutputLowOnPin(GPIO_PORT_P4, GPIO_PIN4); // RegB_~EN
@@ -242,7 +242,7 @@ static void Init_GPIO(void)
     GPIO_setOutputHighOnPin(GPIO_PORT_P2, GPIO_PIN6); // RESET for RP2350
 
     /* Set as Output Pins */
-    GPIO_setAsOutputPin(GPIO_PORT_P1, GPIO_PIN5); //
+    GPIO_setAsOutputPin(GPIO_PORT_P1, GPIO_PIN3 | GPIO_PIN5); // LED, eFuseB_SHDN
     GPIO_setAsOutputPin(GPIO_PORT_P2, GPIO_PIN2 | GPIO_PIN4 | GPIO_PIN6); // P2.2 (WDT1), P2.4, P2.6 
     GPIO_setAsOutputPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2 | GPIO_PIN4); // P3.0, P3.2, P3.4 (WDT2) 
     GPIO_setAsOutputPin(GPIO_PORT_P4, GPIO_PIN4);
