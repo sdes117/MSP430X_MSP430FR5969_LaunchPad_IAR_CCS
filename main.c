@@ -110,14 +110,31 @@ uint8_t ucHeap[ configTOTAL_HEAP_SIZE ] = { 0 };
 
 uint8_t buf2[16];
 
+#ifdef __ICC430__
+__persistent volatile uint16_t g_boot_stage;
+__persistent volatile uint16_t g_prev_boot_stage;
+__persistent volatile uint16_t g_last_sysrstiv;
+#else
+#pragma PERSISTENT( g_boot_stage )
+#pragma PERSISTENT( g_prev_boot_stage )
+#pragma PERSISTENT( g_last_sysrstiv )
+volatile uint16_t g_boot_stage = 0;
+volatile uint16_t g_prev_boot_stage = 0;
+volatile uint16_t g_last_sysrstiv = 0;
+#endif
+
 /*-----------------------------------------------------------*/
 
 int main( void )
 {
 	/* See http://www.FreeRTOS.org/MSP430FR5969_Free_RTOS_Demo.html */
+    g_prev_boot_stage = g_boot_stage;
+    g_last_sysrstiv = SYSRSTIV;
+    g_boot_stage = 0x0001;
 
 	/* Configure the hardware ready to run the demo. */
 	prvSetupHardware();
+    g_boot_stage = 0x0002;
 
 	/* The mainCREATE_SIMPLE_BLINKY_DEMO_ONLY setting is described at the top
 	of this file. */
@@ -256,11 +273,12 @@ static void Init_GPIO(void)
     GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_P1, GPIO_PIN6 | GPIO_PIN7, GPIO_SECONDARY_MODULE_FUNCTION); // I2C SDA, SCL
 
     /* Set PJ.6 and PJ.7 for HFXT. */
-    GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_P1, GPIO_PIN6 | GPIO_PIN7, GPIO_SECONDARY_MODULE_FUNCTION);
+    GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_PJ, GPIO_PIN6 | GPIO_PIN7, GPIO_SECONDARY_MODULE_FUNCTION);
 
-    PM5CTL0 &= ~LOCKLPM5;
+    g_boot_stage = 0x0010;
     /* Disable the GPIO power-on default high-impedance mode. */
     PMM_unlockLPM5();
+    g_boot_stage = 0x0011;
 }
 
 static void Init_Clock(void)
