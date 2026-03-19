@@ -26,11 +26,6 @@
 	</natures>
 	<linkedResources>
 		<link>
-			<name>FreeRTOS_Source</name>
-			<type>2</type>
-			<locationURI>FREERTOS_ROOT/FreeRTOS/Source</locationURI>
-		</link>
-		<link>
 			<name>driverlib.h</name>
 			<type>1</type>
 			<locationURI>PARENT-3-CCS_BASE_ROOT/msp430ware_3_80_14_01/driverlib/driverlib/MSP430FR5xx_6xx/driverlib.h</locationURI>

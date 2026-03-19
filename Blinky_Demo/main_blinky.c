@@ -91,9 +91,13 @@
 /* Priorities at which the tasks are created. */
 #define mainQUEUE_RECEIVE_TASK_PRIORITY		( tskIDLE_PRIORITY + 2 )
 #define	mainQUEUE_SEND_TASK_PRIORITY		( tskIDLE_PRIORITY + 1 )
+#define mainMISSION_TASK_PRIORITY            ( tskIDLE_PRIORITY + 1 )
+#define mainI2C_TASK_PRIORITY                ( tskIDLE_PRIORITY + 2 )
 
 /* The rate at which data is sent to the queue.  This is fixed at 1000ms to implement the watchdog timer. */
 #define mainQUEUE_SEND_FREQUENCY_MS			( pdMS_TO_TICKS( 1000 ) )
+#define mainMISSION_TASK_FREQUENCY_MS        ( pdMS_TO_TICKS( 500 ) )
+#define mainI2C_TASK_FREQUENCY_MS            ( pdMS_TO_TICKS( 50 ) )
 
 /* WDT pulse periods are in seconds (clock task runs once per second). */
 #define WDT_PULSE_PERIOD_DEFAULT_S          ( 1U )
@@ -108,6 +112,17 @@ the queue empty. */
 /* The LED toggled by the Rx task. */
 #define mainTASK_LED						( 0 )
 #define mainTASK_LED_2                      ( 1 )
+
+#define REG_STATUS_MSP_ALIVE                ( 0x0001U )
+#define REG_STATUS_CAN_READY                ( 0x0002U )
+#define REG_STATUS_I2C_LINK_OK              ( 0x0004U )
+#define REG_STATUS_I2C_DEGRADED             ( 0x0008U )
+#define REG_CTRL_CLEAR_WD_TIMEOUT           ( 0x0001U )
+
+#define I2C_FDIR_HEARTBEAT_TIMEOUT_MS       ( 3000U )
+#define I2C_FDIR_RECOVERY_WINDOW_MS         ( 1000U )
+#define I2C_FDIR_RESET_PULSE_MS             ( 20U )
+#define I2C_FDIR_RP_POWER_CYCLE_MS          ( 200U )
 
 #define MAX_TLM_PACKET_SIZE 48
 
@@ -135,6 +150,18 @@ struct AppMessage
     void    *pvData;
 };
 
+typedef struct
+{
+    uint16_t status;
+    uint16_t control;
+    uint16_t heartbeat;
+    uint16_t wdt1_period_s;
+    uint16_t wdt2_period_s;
+    uint16_t i2c_fault_count;
+    uint16_t i2c_recovery_level;
+    uint32_t uptime_s;
+} rp2350_regmap_t;
+
 
 extern int frame_tx_count;
 
@@ -155,12 +182,21 @@ void can_start_tx(void);
 static void prvQueueReceiveTask( void *pvParameters );
 static void prvClockTask( void *pvParameters );
 static void prvCanTask( void *pvParameters );
+static void prvMissionTask( void *pvParameters );
+static void prvI2CServiceTask( void *pvParameters );
+static void prvInitRegMap( void );
+static uint8_t prvSampleRpHeartbeat( void );
+static void prvI2cBusRecovery( void );
 
 /*-----------------------------------------------------------*/
 
 /* The queue used by both tasks. */
 static QueueHandle_t xQueue = NULL;
 static QueueHandle_t xCanQueue = NULL;
+static SemaphoreHandle_t xRegMapMutex = NULL;
+static rp2350_regmap_t xRpRegMap;
+static uint16_t xI2cFaultCount = 0;
+static uint16_t xI2cRecoveryLevel = 0;
 
 struct AppMessage ADCResult = {0};
 struct AppMessage CANflag = {0};
@@ -248,8 +284,10 @@ void main_blinky( void )
 	/* Create the queue. */
     xQueue = xQueueCreate( mainQUEUE_LENGTH, sizeof( struct AppMessage ) );
     xCanQueue = xQueueCreate( 8, sizeof( struct AppMessage ) );
+    xRegMapMutex = xSemaphoreCreateMutex();
+    prvInitRegMap();
 
-	if( xQueue != NULL )
+	if( ( xQueue != NULL ) && ( xRegMapMutex != NULL ) )
 	{
         /* Start the tasks. */
 	    csp_route_start_task(configMINIMAL_STACK_SIZE, mainQUEUE_RECEIVE_TASK_PRIORITY+1);
@@ -265,6 +303,10 @@ void main_blinky( void )
 
         xTaskCreate( prvCanTask, "CN", configMINIMAL_STACK_SIZE, NULL, mainQUEUE_RECEIVE_TASK_PRIORITY+2, NULL ); // highest priority
 
+        xTaskCreate( prvMissionTask, "MIS", configMINIMAL_STACK_SIZE, NULL, mainMISSION_TASK_PRIORITY, NULL );
+
+        xTaskCreate( prvI2CServiceTask, "I2C", configMINIMAL_STACK_SIZE, NULL, mainI2C_TASK_PRIORITY, NULL );
+
 		/* Start the tasks and timer running. */
 		vTaskStartScheduler();
 	}
@@ -277,6 +319,164 @@ void main_blinky( void )
 	http://www.freertos.org/a00111.html. */
 	for( ;; );
 }
+/*-----------------------------------------------------------*/
+
+static void prvInitRegMap( void )
+{
+    memset( &xRpRegMap, 0, sizeof( xRpRegMap ) );
+    xRpRegMap.status = REG_STATUS_MSP_ALIVE | REG_STATUS_I2C_LINK_OK;
+    xRpRegMap.wdt1_period_s = ( uint16_t ) wdt1_pulse_period_s;
+    xRpRegMap.wdt2_period_s = ( uint16_t ) wdt2_pulse_period_s;
+}
+
+static uint8_t prvSampleRpHeartbeat( void )
+{
+    return ( uint8_t ) GPIO_getInputPinValue( GPIO_PORT_P3, GPIO_PIN1 );
+}
+
+static void prvI2cBusRecovery( void )
+{
+    /* Placeholder recovery rung: reinitialize I2C peripheral in future integration step. */
+}
+
+static void prvMissionTask( void *pvParameters )
+{
+    TickType_t xNextWakeTime;
+
+    ( void ) pvParameters;
+    xNextWakeTime = xTaskGetTickCount();
+
+    for( ;; )
+    {
+        vTaskDelayUntil( &xNextWakeTime, mainMISSION_TASK_FREQUENCY_MS );
+
+        if( xSemaphoreTake( xRegMapMutex, pdMS_TO_TICKS( 5 ) ) == pdPASS )
+        {
+            xRpRegMap.heartbeat++;
+            xRpRegMap.uptime_s = current_second;
+
+            if( default_interface != NULL )
+            {
+                xRpRegMap.status |= REG_STATUS_CAN_READY;
+            }
+            else
+            {
+                xRpRegMap.status &= ( uint16_t ) ~REG_STATUS_CAN_READY;
+            }
+
+            if( ( xRpRegMap.control & REG_CTRL_CLEAR_WD_TIMEOUT ) != 0U )
+            {
+                wd_timeout = 86400;
+                xRpRegMap.control &= ( uint16_t ) ~REG_CTRL_CLEAR_WD_TIMEOUT;
+            }
+
+            xRpRegMap.i2c_fault_count = xI2cFaultCount;
+            xRpRegMap.i2c_recovery_level = xI2cRecoveryLevel;
+
+            xSemaphoreGive( xRegMapMutex );
+        }
+    }
+}
+
+static void prvI2CServiceTask( void *pvParameters )
+{
+    TickType_t xNextWakeTime;
+    TickType_t xLastHeartbeatToggle;
+    uint8_t ucLastHeartbeat;
+
+    ( void ) pvParameters;
+    xNextWakeTime = xTaskGetTickCount();
+    xLastHeartbeatToggle = xNextWakeTime;
+    ucLastHeartbeat = prvSampleRpHeartbeat();
+
+    for( ;; )
+    {
+        TickType_t xNow;
+        TickType_t xAge;
+        uint8_t ucHeartbeat;
+
+        vTaskDelayUntil( &xNextWakeTime, mainI2C_TASK_FREQUENCY_MS );
+
+        xNow = xTaskGetTickCount();
+        ucHeartbeat = prvSampleRpHeartbeat();
+
+        if( ucHeartbeat != ucLastHeartbeat )
+        {
+            ucLastHeartbeat = ucHeartbeat;
+            xLastHeartbeatToggle = xNow;
+            xI2cRecoveryLevel = 0;
+
+            if( xSemaphoreTake( xRegMapMutex, pdMS_TO_TICKS( 5 ) ) == pdPASS )
+            {
+                xRpRegMap.status |= REG_STATUS_I2C_LINK_OK;
+                xRpRegMap.status &= ( uint16_t ) ~REG_STATUS_I2C_DEGRADED;
+                wdt1_pulse_period_s = xRpRegMap.wdt1_period_s;
+                wdt2_pulse_period_s = xRpRegMap.wdt2_period_s;
+                xSemaphoreGive( xRegMapMutex );
+            }
+            continue;
+        }
+
+        xAge = xNow - xLastHeartbeatToggle;
+        if( xAge < pdMS_TO_TICKS( I2C_FDIR_HEARTBEAT_TIMEOUT_MS ) )
+        {
+            if( xSemaphoreTake( xRegMapMutex, pdMS_TO_TICKS( 5 ) ) == pdPASS )
+            {
+                wdt1_pulse_period_s = xRpRegMap.wdt1_period_s;
+                wdt2_pulse_period_s = xRpRegMap.wdt2_period_s;
+                xSemaphoreGive( xRegMapMutex );
+            }
+            continue;
+        }
+
+        /* Escalation trigger: no observed RP heartbeat edge within timeout window. */
+        xI2cFaultCount++;
+
+        if( xI2cRecoveryLevel < 4U )
+        {
+            xI2cRecoveryLevel++;
+        }
+
+        if( xSemaphoreTake( xRegMapMutex, pdMS_TO_TICKS( 5 ) ) == pdPASS )
+        {
+            xRpRegMap.status &= ( uint16_t ) ~REG_STATUS_I2C_LINK_OK;
+            xRpRegMap.status |= REG_STATUS_I2C_DEGRADED;
+            xSemaphoreGive( xRegMapMutex );
+        }
+
+        switch( xI2cRecoveryLevel )
+        {
+            case 1U:
+                /* Level 1: retry window only, no hardware action. */
+                break;
+
+            case 2U:
+                /* Level 2: local bus recovery action. */
+                prvI2cBusRecovery();
+                break;
+
+            case 3U:
+                /* Level 3: reset RP via reset line pulse. */
+                GPIO_setOutputLowOnPin( GPIO_PORT_P2, GPIO_PIN6 );
+                vTaskDelay( pdMS_TO_TICKS( I2C_FDIR_RESET_PULSE_MS ) );
+                GPIO_setOutputHighOnPin( GPIO_PORT_P2, GPIO_PIN6 );
+                break;
+
+            default:
+                /* Level 4: power-cycle RP rail, then hold normal reset polarity. */
+                GPIO_setOutputLowOnPin( GPIO_PORT_P3, GPIO_PIN0 );
+                vTaskDelay( pdMS_TO_TICKS( I2C_FDIR_RP_POWER_CYCLE_MS ) );
+                GPIO_setOutputHighOnPin( GPIO_PORT_P3, GPIO_PIN0 );
+                GPIO_setOutputHighOnPin( GPIO_PORT_P2, GPIO_PIN6 );
+                break;
+        }
+
+        /* Start a new observation window after each escalation action. */
+        xLastHeartbeatToggle = xTaskGetTickCount();
+        vTaskDelay( pdMS_TO_TICKS( I2C_FDIR_RECOVERY_WINDOW_MS ) );
+    }
+}
+
 /*-----------------------------------------------------------*/
 
 static void prvClockTask( void *pvParameters )

@@ -245,25 +245,14 @@ static void prvSetupHardware( void )
     Init_CSP();
     Init_CAN();
 
+    /* Release RP2350 reset only after core peripherals are initialized. */
+    GPIO_setOutputHighOnPin(GPIO_PORT_P2, GPIO_PIN6);
+    g_boot_stage = 0x0016;
+
 }
 
 static void Init_GPIO(void)
 {
-    /* Outputs (Default Low) */
-    GPIO_setOutputLowOnPin(GPIO_PORT_P1, GPIO_PIN3 | GPIO_PIN5); // LED, eFuseB_SHDN
-    GPIO_setOutputLowOnPin(GPIO_PORT_P2, GPIO_PIN4); // RegA_~EN
-    GPIO_setOutputLowOnPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2); // EN_3V3, eFuseA_SHDN
-    GPIO_setOutputLowOnPin(GPIO_PORT_P4, GPIO_PIN4); // RegB_~EN
-
-    /* Outputs (Default High) */
-    GPIO_setOutputHighOnPin(GPIO_PORT_P2, GPIO_PIN6); // RESET for RP2350
-
-    /* Set as Output Pins */
-    GPIO_setAsOutputPin(GPIO_PORT_P1, GPIO_PIN3 | GPIO_PIN5); // LED, eFuseB_SHDN
-    GPIO_setAsOutputPin(GPIO_PORT_P2, GPIO_PIN2 | GPIO_PIN4 | GPIO_PIN6); // P2.2 (WDT1), P2.4, P2.6 
-    GPIO_setAsOutputPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2 | GPIO_PIN4); // P3.0, P3.2, P3.4 (WDT2) 
-    GPIO_setAsOutputPin(GPIO_PORT_P4, GPIO_PIN4);
-
     /* Inputs */
     GPIO_setAsInputPin(GPIO_PORT_P1, GPIO_PIN0 | GPIO_PIN1); // RegA_PG, RegB_PG
     GPIO_setAsInputPin(GPIO_PORT_P2, GPIO_PIN0 | GPIO_PIN1); // eFuseA_~FLT, eFuseB_~FLT
@@ -279,6 +268,23 @@ static void Init_GPIO(void)
     /* Disable the GPIO power-on default high-impedance mode. */
     PMM_unlockLPM5();
     g_boot_stage = 0x0011;
+
+    /* Stage output enables after unlock to avoid one large simultaneous pin transition. */
+    g_boot_stage = 0x0012;
+    GPIO_setOutputLowOnPin(GPIO_PORT_P1, GPIO_PIN3 | GPIO_PIN5); // LED, eFuseB_SHDN
+    GPIO_setAsOutputPin(GPIO_PORT_P1, GPIO_PIN3 | GPIO_PIN5);
+
+    g_boot_stage = 0x0013;
+    GPIO_setOutputLowOnPin(GPIO_PORT_P2, GPIO_PIN2 | GPIO_PIN4 | GPIO_PIN6); // WDT1, RegA_~EN, RP2350 reset held low
+    GPIO_setAsOutputPin(GPIO_PORT_P2, GPIO_PIN2 | GPIO_PIN4 | GPIO_PIN6);
+
+    g_boot_stage = 0x0014;
+    GPIO_setOutputLowOnPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2 | GPIO_PIN4); // EN_3V3, eFuseA_SHDN, WDT2
+    GPIO_setAsOutputPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2 | GPIO_PIN4);
+
+    g_boot_stage = 0x0015;
+    GPIO_setOutputLowOnPin(GPIO_PORT_P4, GPIO_PIN4); // RegB_~EN
+    GPIO_setAsOutputPin(GPIO_PORT_P4, GPIO_PIN4);
 }
 
 static void Init_Clock(void)
