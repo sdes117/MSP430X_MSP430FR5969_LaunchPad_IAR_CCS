@@ -81,7 +81,7 @@ __persistent keyword to be used.  See http://www.freertos.org/a00111.html#heap_4
 
 /* Run time stats gathering definitions. */
 //vgl #define configGENERATE_RUN_TIME_STATS   1
-#define configGENERATE_RUN_TIME_STATS   0
+#define configGENERATE_RUN_TIME_STATS   1
 #define portCONFIGURE_TIMER_FOR_RUN_TIME_STATS() vConfigureTimerForRunTimeStats()
 /* Return the current timer counter value + the overflow counter. */
 #define portGET_RUN_TIME_COUNTER_VALUE() 	( ( ( uint32_t ) TA1R ) + ulRunTimeCounterOverflows )

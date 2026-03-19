@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <projectDescription>
-	<name>RTOSDemo</name>
+	<name>RTOSDemo_HIA</name>
 	<comment></comment>
 	<projects>
 	</projects>
@@ -28,7 +28,7 @@
 		<link>
 			<name>FreeRTOS_Source</name>
 			<type>2</type>
-			<locationURI>FREERTOS_ROOT/FreeRTOS/Source</locationURI>
+			<locationURI>FREERTOS_ROOT1/FreeRTOS/Source</locationURI>
 		</link>
 		<link>
 			<name>driverlib.h</name>
@@ -38,48 +38,148 @@
 		<link>
 			<name>mcp2515.c</name>
 			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/Users/FAF02/ti/workspace_v12/mcp2515-master/msp430/mcp2515.c</locationURI>
+			<locationURI>copy_PARENT/Users/FAF02/ti/workspace_v12/mcp2515-master/msp430/mcp2515.c</locationURI>
 		</link>
 		<link>
 			<name>mcp2515.h</name>
 			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/Users/FAF02/ti/workspace_v12/mcp2515-master/msp430/mcp2515.h</locationURI>
+			<locationURI>copy_PARENT/Users/FAF02/ti/workspace_v12/mcp2515-master/msp430/mcp2515.h</locationURI>
 		</link>
 		<link>
 			<name>msp430_spi.c</name>
 			<type>1</type>
-			<locationURI>PARENT-4-PROJECT_LOC/Users/FAF02/ti/workspace_v12/mcp2515-master/msp430/msp430_spi.c</locationURI>
+			<locationURI>copy_PARENT/Users/FAF02/ti/workspace_v12/mcp2515-master/msp430/msp430_spi.c</locationURI>
 		</link>
 		<link>
 			<name>Full_Demo/FreeRTOS+CLI</name>
 			<type>2</type>
-			<locationURI>FREERTOS_ROOT/FreeRTOS-Plus/Source/FreeRTOS-Plus-CLI</locationURI>
+			<locationURI>FREERTOS_ROOT1/FreeRTOS-Plus/Source/FreeRTOS-Plus-CLI</locationURI>
 		</link>
 		<link>
 			<name>Full_Demo/Sample-CLI-commands.c</name>
 			<type>1</type>
-			<locationURI>FREERTOS_ROOT/FreeRTOS-Plus/Demo/Common/FreeRTOS_Plus_CLI_Demos/Sample-CLI-commands.c</locationURI>
+			<locationURI>FREERTOS_ROOT1/FreeRTOS-Plus/Demo/Common/FreeRTOS_Plus_CLI_Demos/Sample-CLI-commands.c</locationURI>
 		</link>
 		<link>
 			<name>Full_Demo/Standard_Demo_Tasks</name>
 			<type>2</type>
-			<locationURI>FREERTOS_ROOT/FreeRTOS/Demo/Common/Minimal</locationURI>
+			<locationURI>FREERTOS_ROOT1/FreeRTOS/Demo/Common/Minimal</locationURI>
 		</link>
 		<link>
 			<name>Full_Demo/UARTCommandConsole.c</name>
 			<type>1</type>
-			<locationURI>FREERTOS_ROOT/FreeRTOS-Plus/Demo/Common/FreeRTOS_Plus_CLI_Demos/UARTCommandConsole.c</locationURI>
+			<locationURI>FREERTOS_ROOT1/FreeRTOS-Plus/Demo/Common/FreeRTOS_Plus_CLI_Demos/UARTCommandConsole.c</locationURI>
 		</link>
 		<link>
 			<name>Full_Demo/Standard_Demo_Tasks/include</name>
 			<type>2</type>
-			<locationURI>FREERTOS_ROOT/FreeRTOS/Demo/Common/include</locationURI>
+			<locationURI>FREERTOS_ROOT1/FreeRTOS/Demo/Common/include</locationURI>
 		</link>
 	</linkedResources>
+	<filteredResources>
+		<filter>
+			<id>1773659441921</id>
+			<name>FreeRTOS_Source/portable</name>
+			<type>9</type>
+			<matcher>
+				<id>org.eclipse.ui.ide.multiFilter</id>
+				<arguments>1.0-name-matches-false-false-CCS</arguments>
+			</matcher>
+		</filter>
+		<filter>
+			<id>1773659441939</id>
+			<name>FreeRTOS_Source/portable</name>
+			<type>9</type>
+			<matcher>
+				<id>org.eclipse.ui.ide.multiFilter</id>
+				<arguments>1.0-name-matches-false-false-MemMang</arguments>
+			</matcher>
+		</filter>
+		<filter>
+			<id>1773621580460</id>
+			<name>Full_Demo/Standard_Demo_Tasks</name>
+			<type>5</type>
+			<matcher>
+				<id>org.eclipse.ui.ide.multiFilter</id>
+				<arguments>1.0-name-matches-false-false-blocktim.c</arguments>
+			</matcher>
+		</filter>
+		<filter>
+			<id>1773621580471</id>
+			<name>Full_Demo/Standard_Demo_Tasks</name>
+			<type>5</type>
+			<matcher>
+				<id>org.eclipse.ui.ide.multiFilter</id>
+				<arguments>1.0-name-matches-false-false-countsem.c</arguments>
+			</matcher>
+		</filter>
+		<filter>
+			<id>1773621580483</id>
+			<name>Full_Demo/Standard_Demo_Tasks</name>
+			<type>5</type>
+			<matcher>
+				<id>org.eclipse.ui.ide.multiFilter</id>
+				<arguments>1.0-name-matches-false-false-dynamic.c</arguments>
+			</matcher>
+		</filter>
+		<filter>
+			<id>1773621580496</id>
+			<name>Full_Demo/Standard_Demo_Tasks</name>
+			<type>5</type>
+			<matcher>
+				<id>org.eclipse.ui.ide.multiFilter</id>
+				<arguments>1.0-name-matches-false-false-EventGroupsDemo.c</arguments>
+			</matcher>
+		</filter>
+		<filter>
+			<id>1773621580507</id>
+			<name>Full_Demo/Standard_Demo_Tasks</name>
+			<type>5</type>
+			<matcher>
+				<id>org.eclipse.ui.ide.multiFilter</id>
+				<arguments>1.0-name-matches-false-false-GenQTest.c</arguments>
+			</matcher>
+		</filter>
+		<filter>
+			<id>1773621580526</id>
+			<name>Full_Demo/Standard_Demo_Tasks</name>
+			<type>5</type>
+			<matcher>
+				<id>org.eclipse.ui.ide.multiFilter</id>
+				<arguments>1.0-name-matches-false-false-recmutex.c</arguments>
+			</matcher>
+		</filter>
+		<filter>
+			<id>1773621580532</id>
+			<name>Full_Demo/Standard_Demo_Tasks</name>
+			<type>5</type>
+			<matcher>
+				<id>org.eclipse.ui.ide.multiFilter</id>
+				<arguments>1.0-name-matches-false-false-TaskNotify.c</arguments>
+			</matcher>
+		</filter>
+		<filter>
+			<id>1773659532071</id>
+			<name>FreeRTOS_Source/portable/CCS</name>
+			<type>9</type>
+			<matcher>
+				<id>org.eclipse.ui.ide.multiFilter</id>
+				<arguments>1.0-name-matches-false-false-MSP430X</arguments>
+			</matcher>
+		</filter>
+	</filteredResources>
 	<variableList>
 		<variable>
 			<name>FREERTOS_ROOT</name>
 			<value>$%7BPARENT-3-PROJECT_LOC%7D</value>
+		</variable>
+		<variable>
+			<name>FREERTOS_ROOT1</name>
+			<value>$%7BPARENT-1-TI_PRODUCTS_DIR%7D/FreeRTOSv202112.00</value>
+		</variable>
+		<variable>
+			<name>copy_PARENT</name>
+			<value>$%7BPARENT-1-TI_PRODUCTS_DIR%7D</value>
 		</variable>
 	</variableList>
 </projectDescription>

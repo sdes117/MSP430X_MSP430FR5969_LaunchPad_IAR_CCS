@@ -110,11 +110,27 @@ uint8_t ucHeap[ configTOTAL_HEAP_SIZE ] = { 0 };
 
 uint8_t buf2[16];
 
+#ifdef __ICC430__
+__persistent volatile uint16_t g_boot_stage;
+__persistent volatile uint16_t g_prev_boot_stage;
+__persistent volatile uint16_t g_last_sysrstiv;
+#else
+#pragma PERSISTENT( g_boot_stage )
+#pragma PERSISTENT( g_prev_boot_stage )
+#pragma PERSISTENT( g_last_sysrstiv )
+volatile uint16_t g_boot_stage = 0;
+volatile uint16_t g_prev_boot_stage = 0;
+volatile uint16_t g_last_sysrstiv = 0;
+#endif
+
 /*-----------------------------------------------------------*/
 
 int main( void )
 {
 	/* See http://www.FreeRTOS.org/MSP430FR5969_Free_RTOS_Demo.html */
+    g_prev_boot_stage = g_boot_stage;
+    g_last_sysrstiv = SYSRSTIV;
+    g_boot_stage = 0x0001;
 
 	/* Configure the hardware ready to run the demo. */
 	prvSetupHardware();
@@ -223,6 +239,11 @@ static void prvSetupHardware( void )
     WDT_A_hold( __MSP430_BASEADDRESS_WDT_A__ );
 
     Init_GPIO();
+
+    /* Release RP2350 reset only after core peripherals are initialized. */
+    // GPIO_setOutputHighOnPin(GPIO_PORT_P2, GPIO_PIN6);
+    g_boot_stage = 0x0016;
+
     Init_Clock();
     Init_ADC();
     Init_CSP();
@@ -232,20 +253,20 @@ static void prvSetupHardware( void )
 
 static void Init_GPIO(void)
 {
-    /* Outputs (Default Low) */
-    GPIO_setOutputLowOnPin(GPIO_PORT_P1, GPIO_PIN3 | GPIO_PIN5); // LED, eFuseB_SHDN
+   /* Outputs (Default Low) */
+    /*GPIO_setOutputLowOnPin(GPIO_PORT_P1, GPIO_PIN3 | GPIO_PIN5); // LED, eFuseB_SHDN
     GPIO_setOutputLowOnPin(GPIO_PORT_P2, GPIO_PIN4); // RegA_~EN
     GPIO_setOutputLowOnPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2); // EN_3V3, eFuseA_SHDN
-    GPIO_setOutputLowOnPin(GPIO_PORT_P4, GPIO_PIN4); // RegB_~EN
+    GPIO_setOutputLowOnPin(GPIO_PORT_P4, GPIO_PIN4); // RegB_~EN*/
 
     /* Outputs (Default High) */
-    GPIO_setOutputHighOnPin(GPIO_PORT_P2, GPIO_PIN6); // RESET for RP2350
+  //  GPIO_setOutputHighOnPin(GPIO_PORT_P2, GPIO_PIN6); // RESET for RP2350
 
     /* Set as Output Pins */
-    GPIO_setAsOutputPin(GPIO_PORT_P1, GPIO_PIN3 | GPIO_PIN5); // LED, eFuseB_SHDN
+   /* GPIO_setAsOutputPin(GPIO_PORT_P1, GPIO_PIN3 | GPIO_PIN5); // LED, eFuseB_SHDN
     GPIO_setAsOutputPin(GPIO_PORT_P2, GPIO_PIN2 | GPIO_PIN4 | GPIO_PIN6); // P2.2 (WDT1), P2.4, P2.6 
     GPIO_setAsOutputPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2 | GPIO_PIN4); // P3.0, P3.2, P3.4 (WDT2) 
-    GPIO_setAsOutputPin(GPIO_PORT_P4, GPIO_PIN4);
+    GPIO_setAsOutputPin(GPIO_PORT_P4, GPIO_PIN4); */
 
     /* Inputs */
     GPIO_setAsInputPin(GPIO_PORT_P1, GPIO_PIN0 | GPIO_PIN1); // RegA_PG, RegB_PG
@@ -256,11 +277,23 @@ static void Init_GPIO(void)
     GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_P1, GPIO_PIN6 | GPIO_PIN7, GPIO_SECONDARY_MODULE_FUNCTION); // I2C SDA, SCL
 
     /* Set PJ.6 and PJ.7 for HFXT. */
-    GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_P1, GPIO_PIN6 | GPIO_PIN7, GPIO_SECONDARY_MODULE_FUNCTION);
+    GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_PJ, GPIO_PIN6 | GPIO_PIN7, GPIO_PRIMARY_MODULE_FUNCTION);
 
-    PM5CTL0 &= ~LOCKLPM5;
-    /* Disable the GPIO power-on default high-impedance mode. */
+    /* Stage output enables after unlock to avoid one large simultaneous pin transition. */
+    GPIO_setOutputLowOnPin(GPIO_PORT_P1, GPIO_PIN3 | GPIO_PIN5); // LED, eFuseB_SHDN
+    GPIO_setAsOutputPin(GPIO_PORT_P1, GPIO_PIN3 | GPIO_PIN5);
+
+    GPIO_setOutputLowOnPin(GPIO_PORT_P2, GPIO_PIN2 | GPIO_PIN4 | GPIO_PIN6 | GPIO_PIN7); // WDT1, RegA_~EN, ~RESET for RP
+    GPIO_setAsOutputPin(GPIO_PORT_P2, GPIO_PIN2 | GPIO_PIN4 | GPIO_PIN6 | GPIO_PIN7);
+
+    GPIO_setOutputLowOnPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2 | GPIO_PIN4); // EN_3V3, eFuseA_SHDN, WDT2
+    GPIO_setAsOutputPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2 | GPIO_PIN4);
+
+    GPIO_setOutputLowOnPin(GPIO_PORT_P4, GPIO_PIN4); // RegB_~EN
+    GPIO_setAsOutputPin(GPIO_PORT_P4, GPIO_PIN4);
+
     PMM_unlockLPM5();
+
 }
 
 static void Init_Clock(void)
