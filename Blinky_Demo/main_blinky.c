@@ -96,9 +96,15 @@
 #define mainQUEUE_SEND_FREQUENCY_MS			( pdMS_TO_TICKS( 1000 ) )
 
 /* WDT pulse periods are in seconds (clock task runs once per second). */
-#define WDT_PULSE_PERIOD_DEFAULT_S          ( 1U )
+#define WDT_PULSE_PERIOD_DEFAULT_S          ( 4U )
 /* At 8 MHz MCLK, 8 cycles = 1 us, which exceeds the 500 ns minimum. */
 #define WDT_EDGE_LOW_CYCLES                 ( 8U )
+
+/* Fault-injection test mode: latch one WDT line after N timer blinks. */
+#define WDT_FAULT_INJECT_ENABLE             ( 1U )
+#define WDT_FAULT_AFTER_BLINKS              ( 10U )
+#define WDT_FAULT_LINE                      ( 1U )   /* 1 = WDT1 (P2.2), 2 = WDT2 (P3.4) */
+#define WDT_FAULT_LEVEL_HIGH                ( 0U )   /* 0 = force low, 1 = force high */
 
 /* The number of items the queue can hold.  This is 1 as the receive task
 will remove items as they are added, meaning the send task should always find
@@ -150,6 +156,7 @@ int  csp_reboot_function(void);
 void can_start_tx(void);
 static inline void prvPulseWdt1(void);
 static inline void prvPulseWdt2(void);
+static inline void prvForceWdtLine(uint8_t line, uint8_t level_high);
 
 /*
  * The tasks as described in the comments at the top of this file.
@@ -233,6 +240,36 @@ static inline void prvPulseWdt2(void)
     P3OUT &= (uint8_t) ~BIT4;
     __delay_cycles( WDT_EDGE_LOW_CYCLES );
     P3OUT |= BIT4;
+    taskEXIT_CRITICAL();
+}
+
+static inline void prvForceWdtLine(uint8_t line, uint8_t level_high)
+{
+    taskENTER_CRITICAL();
+
+    if (line == 1U)
+    {
+        if (level_high != 0U)
+        {
+            P2OUT |= BIT2;
+        }
+        else
+        {
+            P2OUT &= (uint8_t) ~BIT2;
+        }
+    }
+    else if (line == 2U)
+    {
+        if (level_high != 0U)
+        {
+            P3OUT |= BIT4;
+        }
+        else
+        {
+            P3OUT &= (uint8_t) ~BIT4;
+        }
+    }
+
     taskEXIT_CRITICAL();
 }
 
@@ -345,6 +382,8 @@ static void prvQueueReceiveTask( void *pvParameters )
     csp_conn_t *conn;
     uint32_t wdt1_counter = 0;
     uint32_t wdt2_counter = 0;
+    uint32_t wdt_fault_blink_counter = 0;
+    uint8_t wdt_fault_active = 0U;
 
     /* Remove compiler warning about unused parameter. */
     ( void ) pvParameters;
@@ -385,6 +424,22 @@ static void prvQueueReceiveTask( void *pvParameters )
             }
             vParTestToggleLED( mainTASK_LED );
             vParTestToggleLED( mainTASK_LED_2 );
+
+#if (WDT_FAULT_INJECT_ENABLE != 0U)
+            if ((wdt_fault_active == 0U) && (++wdt_fault_blink_counter >= WDT_FAULT_AFTER_BLINKS))
+            {
+                wdt_fault_active = 1U;
+                if (WDT_FAULT_LINE == 1U)
+                {
+                    wdt1_pulse_period_s = 0U;
+                }
+                else if (WDT_FAULT_LINE == 2U)
+                {
+                    wdt2_pulse_period_s = 0U;
+                }
+                prvForceWdtLine(WDT_FAULT_LINE, WDT_FAULT_LEVEL_HIGH);
+            }
+#endif
 
             /* Toggle each WDT output on its own configurable cadence. */
             if (wdt1_pulse_period_s == 0U)
