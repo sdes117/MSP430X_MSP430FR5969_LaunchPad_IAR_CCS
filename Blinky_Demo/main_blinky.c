@@ -148,6 +148,8 @@ void handle_csp_tlm_request(csp_conn_t * conn, csp_packet_t * packet);
 void handle_csp_timesync(csp_conn_t * conn, csp_packet_t * packet);
 int  csp_reboot_function(void);
 void can_start_tx(void);
+static inline void prvPulseWdt1(void);
+static inline void prvPulseWdt2(void);
 
 /*
  * The tasks as described in the comments at the top of this file.
@@ -212,6 +214,26 @@ int csp_reboot_function(void)
 
     /* shouldn't get here */
     return CSP_ERR_NONE;
+}
+
+/* Keep the low pulse tightly bounded by avoiding scheduler/ISR preemption. */
+static inline void prvPulseWdt1(void)
+{
+    taskENTER_CRITICAL();
+    P2OUT &= (uint8_t) ~BIT2;
+    __delay_cycles( WDT_EDGE_LOW_CYCLES );
+    P2OUT |= BIT2;
+    taskEXIT_CRITICAL();
+}
+
+/* Keep the low pulse tightly bounded by avoiding scheduler/ISR preemption. */
+static inline void prvPulseWdt2(void)
+{
+    taskENTER_CRITICAL();
+    P3OUT &= (uint8_t) ~BIT4;
+    __delay_cycles( WDT_EDGE_LOW_CYCLES );
+    P3OUT |= BIT4;
+    taskEXIT_CRITICAL();
 }
 
 
@@ -372,9 +394,7 @@ static void prvQueueReceiveTask( void *pvParameters )
             else if (++wdt1_counter >= wdt1_pulse_period_s)
             {
                 wdt1_counter = 0;
-                GPIO_setOutputLowOnPin( GPIO_PORT_P2, GPIO_PIN2 );
-                __delay_cycles( WDT_EDGE_LOW_CYCLES );
-                GPIO_setOutputHighOnPin( GPIO_PORT_P2, GPIO_PIN2 );
+                prvPulseWdt1();
             }
 
             if (wdt2_pulse_period_s == 0U)
@@ -384,9 +404,7 @@ static void prvQueueReceiveTask( void *pvParameters )
             else if (++wdt2_counter >= wdt2_pulse_period_s)
             {
                 wdt2_counter = 0;
-                GPIO_setOutputLowOnPin( GPIO_PORT_P3, GPIO_PIN4 );
-                __delay_cycles( WDT_EDGE_LOW_CYCLES );
-                GPIO_setOutputHighOnPin( GPIO_PORT_P3, GPIO_PIN4 );
+                prvPulseWdt2();
             }
         }
 
