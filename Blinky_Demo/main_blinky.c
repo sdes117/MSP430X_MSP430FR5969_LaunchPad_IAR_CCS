@@ -429,10 +429,6 @@ static void prvQueueReceiveTask( void *pvParameters )
             if ((wdt_fault_active == 0U) && (++wdt_fault_blink_counter >= WDT_FAULT_AFTER_BLINKS))
             {
                 wdt_fault_active = 1U;
-            }
-
-            if (wdt_fault_active != 0U)
-            {
                 if (WDT_FAULT_LINE == 1U)
                 {
                     wdt1_pulse_period_s = 0U;
@@ -441,20 +437,11 @@ static void prvQueueReceiveTask( void *pvParameters )
                 {
                     wdt2_pulse_period_s = 0U;
                 }
-
-                /* Re-apply forced state to keep the selected heartbeat latched. */
                 prvForceWdtLine(WDT_FAULT_LINE, WDT_FAULT_LEVEL_HIGH);
             }
 #endif
 
             /* Toggle each WDT output on its own configurable cadence. */
-#if (WDT_FAULT_INJECT_ENABLE != 0U)
-            if ((wdt_fault_active != 0U) && (WDT_FAULT_LINE == 1U))
-            {
-                wdt1_counter = 0;
-            }
-            else
-#endif
             if (wdt1_pulse_period_s == 0U)
             {
                 wdt1_counter = 0;
@@ -465,13 +452,6 @@ static void prvQueueReceiveTask( void *pvParameters )
                 prvPulseWdt1();
             }
 
-#if (WDT_FAULT_INJECT_ENABLE != 0U)
-            if ((wdt_fault_active != 0U) && (WDT_FAULT_LINE == 2U))
-            {
-                wdt2_counter = 0;
-            }
-            else
-#endif
             if (wdt2_pulse_period_s == 0U)
             {
                 wdt2_counter = 0;
@@ -481,14 +461,6 @@ static void prvQueueReceiveTask( void *pvParameters )
                 wdt2_counter = 0;
                 prvPulseWdt2();
             }
-
-#if (WDT_FAULT_INJECT_ENABLE != 0U)
-            if (wdt_fault_active != 0U)
-            {
-                /* Apply forced level last so no later code can override it. */
-                prvForceWdtLine(WDT_FAULT_LINE, WDT_FAULT_LEVEL_HIGH);
-            }
-#endif
         }
 
         if( msg.msgID == eADC )
