@@ -88,6 +88,8 @@
 
 #include "csp_extensions.h"
 
+#include "mission.h"
+
 /* Priorities at which the tasks are created. */
 #define mainQUEUE_RECEIVE_TASK_PRIORITY		( tskIDLE_PRIORITY + 2 )
 #define	mainQUEUE_SEND_TASK_PRIORITY		( tskIDLE_PRIORITY + 1 )
@@ -205,6 +207,22 @@ uint32_t tlm_counter = 0;
 volatile uint32_t wdt1_pulse_period_s = WDT_PULSE_PERIOD_DEFAULT_S;
 volatile uint32_t wdt2_pulse_period_s = WDT_PULSE_PERIOD_DEFAULT_S;
 
+/* Fault-inject diagnostics: snapshot of WDT2 pin registers captured each
+ * tick while the fault is active.  Inspect these in the CCS Expressions
+ * view to determine whether P3SEL, P3DIR, or P3OUT is being changed by
+ * something between ticks.  All fields should be stable once the fault fires:
+ *   p3sel0_snap & BIT4  == 0  (GPIO mode, not peripheral)
+ *   p3sel1_snap & BIT4  == 0
+ *   p3dir_snap  & BIT4  != 0  (output)
+ *   p3out_snap  & BIT4  == 0  (stuck low)
+ * A non-zero SEL bit means a peripheral reclaimed the pin between ticks.
+ * A high OUT bit with zero SEL bits means something wrote P3OUT |= BIT4. */
+volatile uint8_t dbg_p3sel0_snap = 0U;
+volatile uint8_t dbg_p3sel1_snap = 0U;
+volatile uint8_t dbg_p3dir_snap  = 0U;
+volatile uint8_t dbg_p3out_snap  = 0U;
+volatile uint32_t dbg_fault_tick = 0U;
+
 csp_iface_t * default_interface = NULL;
 csp_conn_t *conn = NULL;
 
@@ -249,6 +267,10 @@ static inline void prvForceWdtLine(uint8_t line, uint8_t level_high)
 
     if (line == 1U)
     {
+        /* Ensure pin is GPIO output, not a peripheral function. */
+        P2SEL0 &= (uint8_t) ~BIT2;
+        P2SEL1 &= (uint8_t) ~BIT2;
+        P2DIR  |= BIT2;
         if (level_high != 0U)
         {
             P2OUT |= BIT2;
@@ -260,6 +282,10 @@ static inline void prvForceWdtLine(uint8_t line, uint8_t level_high)
     }
     else if (line == 2U)
     {
+        /* Ensure pin is GPIO output, not a peripheral function. */
+        P3SEL0 &= (uint8_t) ~BIT4;
+        P3SEL1 &= (uint8_t) ~BIT4;
+        P3DIR  |= BIT4;
         if (level_high != 0U)
         {
             P3OUT |= BIT4;
@@ -426,6 +452,7 @@ static void prvQueueReceiveTask( void *pvParameters )
             vParTestToggleLED( mainTASK_LED_2 );
 
 #if (WDT_FAULT_INJECT_ENABLE != 0U)
+            /* Activate fault after N blinks. */
             if ((wdt_fault_active == 0U) && (++wdt_fault_blink_counter >= WDT_FAULT_AFTER_BLINKS))
             {
                 wdt_fault_active = 1U;
@@ -437,7 +464,6 @@ static void prvQueueReceiveTask( void *pvParameters )
                 {
                     wdt2_pulse_period_s = 0U;
                 }
-                prvForceWdtLine(WDT_FAULT_LINE, WDT_FAULT_LEVEL_HIGH);
             }
 #endif
 
@@ -461,6 +487,28 @@ static void prvQueueReceiveTask( void *pvParameters )
                 wdt2_counter = 0;
                 prvPulseWdt2();
             }
+
+#if (WDT_FAULT_INJECT_ENABLE != 0U)
+            /* Re-assert the stuck level every tick while fault is active.
+             * This runs after the pulse logic so it is always the last write
+             * to the pin, overriding any peripheral or ISR that drove it back. */
+            if (wdt_fault_active == 1U)
+            {
+                /* Snapshot registers BEFORE re-asserting so the values reflect
+                 * what arrived between ticks.  Check these in the debugger:
+                 *   dbg_p3sel0_snap & BIT4 or dbg_p3sel1_snap & BIT4 non-zero
+                 *     → a peripheral reclaimed P3.4 between ticks.
+                 *   dbg_p3out_snap & BIT4 non-zero, both SEL snaps zero
+                 *     → something wrote P3OUT |= BIT4 directly. */
+                dbg_p3sel0_snap = P3SEL0;
+                dbg_p3sel1_snap = P3SEL1;
+                dbg_p3dir_snap  = P3DIR;
+                dbg_p3out_snap  = P3OUT;
+                ++dbg_fault_tick;
+
+                prvForceWdtLine(WDT_FAULT_LINE, WDT_FAULT_LEVEL_HIGH);
+            }
+#endif
         }
 
         if( msg.msgID == eADC )
