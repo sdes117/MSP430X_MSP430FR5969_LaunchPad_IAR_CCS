@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(find c:/ti/ccs2050 -path *FreeRTOS*portable*MSP430*)",
-      "Bash(find c:/ti/ccs2050/ccs -name FreeRTOSv202112* -type d)",
-      "Bash(find /c/Users/desai -name FreeRTOSv* -type d)"
-    ]
-  }
-}
