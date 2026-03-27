@@ -283,10 +283,13 @@ static void Init_GPIO(void)
     GPIO_setOutputLowOnPin(GPIO_PORT_P1, GPIO_PIN3 | GPIO_PIN5); // LED, eFuseB_SHDN
     GPIO_setAsOutputPin(GPIO_PORT_P1, GPIO_PIN3 | GPIO_PIN5);
 
-    GPIO_setOutputLowOnPin(GPIO_PORT_P2, GPIO_PIN2 | GPIO_PIN4 | GPIO_PIN6 | GPIO_PIN7); // WDT1, RegA_~EN, ~RESET for RP
+    GPIO_setOutputLowOnPin(GPIO_PORT_P2, GPIO_PIN4 | GPIO_PIN6 | GPIO_PIN7); // RegA_~EN, ~RESET for RP
+    GPIO_setOutputHighOnPin(GPIO_PORT_P2, GPIO_PIN2); // WDT1
     GPIO_setAsOutputPin(GPIO_PORT_P2, GPIO_PIN2 | GPIO_PIN4 | GPIO_PIN6 | GPIO_PIN7);
 
-    GPIO_setOutputLowOnPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2 | GPIO_PIN4); // EN_3V3, eFuseA_SHDN, WDT2
+
+    GPIO_setOutputLowOnPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2); // EN_3V3, eFuseA_SHDN
+    GPIO_setOutputHighOnPin(GPIO_PORT_P3, GPIO_PIN4); // WDT2
     GPIO_setAsOutputPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2 | GPIO_PIN4);
 
     GPIO_setOutputLowOnPin(GPIO_PORT_P4, GPIO_PIN4); // RegB_~EN
