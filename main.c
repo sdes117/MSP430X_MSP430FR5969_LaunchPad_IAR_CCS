@@ -245,9 +245,9 @@ static void prvSetupHardware( void )
     g_boot_stage = 0x0016;
 
     Init_Clock();
-    Init_ADC();
+    //Init_ADC();
     Init_CSP();
-    Init_CAN();
+    //Init_CAN();
 
 }
 

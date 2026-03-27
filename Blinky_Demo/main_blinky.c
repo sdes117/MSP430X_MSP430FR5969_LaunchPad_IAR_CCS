@@ -96,14 +96,14 @@
 #define mainQUEUE_SEND_FREQUENCY_MS			( pdMS_TO_TICKS( 1000 ) )
 
 /* WDT pulse periods are in seconds (clock task runs once per second). */
-#define WDT_PULSE_PERIOD_DEFAULT_S          ( 4U )
+#define WDT_PULSE_PERIOD_DEFAULT_S          ( 2U )
 /* At 8 MHz MCLK, 8 cycles = 1 us, which exceeds the 500 ns minimum. */
 #define WDT_EDGE_LOW_CYCLES                 ( 8U )
 
 /* Fault-injection test mode: latch one WDT line after N timer blinks. */
 #define WDT_FAULT_INJECT_ENABLE             ( 1U )
 #define WDT_FAULT_AFTER_BLINKS              ( 10U )
-#define WDT_FAULT_LINE                      ( 1U )   /* 1 = WDT1 (P2.2), 2 = WDT2 (P3.4) */
+#define WDT_FAULT_LINE                      ( 2U )   /* 1 = WDT1 (P2.2), 2 = WDT2 (P3.4) */
 #define WDT_FAULT_LEVEL_HIGH                ( 0U )   /* 0 = force low, 1 = force high */
 
 /* The number of items the queue can hold.  This is 1 as the receive task
