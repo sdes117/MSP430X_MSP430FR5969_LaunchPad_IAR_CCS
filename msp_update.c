@@ -29,20 +29,26 @@ static upd_state_t s_state     = UPD_IDLE;
 static uint32_t    s_image_len = 0u;   /* expected image size from BEGIN */
 
 /* ------------------------------------------------------------------
- * Internal: compute CRC16 over the staging region (hardware module)
+ * Internal: software CRC32 over the staging region (IEEE 802.3)
  * ------------------------------------------------------------------ */
 
 static uint32_t prv_crc32_staging(uint32_t len)
 {
     const uint8_t *ptr = (const uint8_t *)MSP_UPDATE_STAGING_ADDR;
-    uint32_t       i;
+    uint32_t crc = 0xFFFFFFFFuL;
+    uint32_t i;
+    uint8_t  j;
 
-    CRC_setSeed(CRC_BASE, 0xFFFFu);
     for (i = 0u; i < len; i++)
     {
-        CRC_set8BitData(CRC_BASE, ptr[i]);
+        crc ^= (uint32_t)ptr[i];
+        for (j = 0u; j < 8u; j++)
+        {
+            if (crc & 1uL) { crc = (crc >> 1u) ^ 0xEDB88320uL; }
+            else            { crc >>= 1u; }
+        }
     }
-    return (uint32_t)CRC_getResult(CRC_BASE);
+    return crc ^ 0xFFFFFFFFuL;
 }
 
 /* ------------------------------------------------------------------

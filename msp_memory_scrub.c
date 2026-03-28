@@ -4,8 +4,8 @@
  * Hourly CRC32 memory scrub over the MSP430FR code FRAM region.
  * See msp_memory_scrub.h for full description.
  *
- * Uses the MSP430FR5959 hardware CRC16 module via driverlib (CRC_BASE).
- * The hardware module is polled synchronously — no DMA or interrupt.
+ * Uses a software CRC32 (IEEE 802.3, reflected polynomial 0xEDB88320).
+ * No hardware CRC32 module on the MSP430FR5959; bit-by-bit implementation.
  */
 
 #include "msp_memory_scrub.h"
@@ -42,22 +42,26 @@ void msp_memory_scrub_invalidate(void)
 }
 
 /* ------------------------------------------------------------------
- * Internal: compute CRC16 over the scrub region (hardware module)
+ * Internal: software CRC32 over the scrub region (IEEE 802.3)
  * ------------------------------------------------------------------ */
 
 static uint32_t prv_compute_crc(void)
 {
     const uint8_t *ptr = (const uint8_t *)SCRUB_REGION_START_ADDR;
-    uint32_t       i;
-
-    CRC_setSeed(CRC_BASE, 0xFFFFu);
+    uint32_t crc = 0xFFFFFFFFuL;
+    uint32_t i;
+    uint8_t  j;
 
     for (i = 0u; i < SCRUB_REGION_LEN; i++)
     {
-        CRC_set8BitData(CRC_BASE, ptr[i]);
+        crc ^= (uint32_t)ptr[i];
+        for (j = 0u; j < 8u; j++)
+        {
+            if (crc & 1uL) { crc = (crc >> 1u) ^ 0xEDB88320uL; }
+            else            { crc >>= 1u; }
+        }
     }
-
-    return (uint32_t)CRC_getResult(CRC_BASE);
+    return crc ^ 0xFFFFFFFFuL;
 }
 
 /* ------------------------------------------------------------------
