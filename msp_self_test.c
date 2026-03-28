@@ -22,13 +22,6 @@ volatile uint8_t g_post_result = 0u;
  * GPIO pin definitions matching Init_GPIO() in main.c
  * ------------------------------------------------------------------ */
 
-/* WDT output pins */
-#define POST_WDT1_PORT      GPIO_PORT_P2
-#define POST_WDT1_PIN       GPIO_PIN2   /* P2.2 — should be HIGH at boot */
-
-#define POST_WDT2_PORT      GPIO_PORT_P3
-#define POST_WDT2_PIN       GPIO_PIN4   /* P3.4 — should be HIGH at boot */
-
 /* I2C pins (UCB0: P1.6 = SDA, P1.7 = SCL) — configured as peripheral,
  * but checking the physical level via GPIO input is not meaningful after
  * the pin is reassigned to the peripheral module.  Instead, we check the
@@ -45,12 +38,12 @@ void msp_self_test_run(uint16_t reset_cause, uint16_t boot_count)
     /* ---------------------------------------------------------------
      * 1. WDT output lines: should be HIGH at boot (set in Init_GPIO)
      * --------------------------------------------------------------- */
-    if (GPIO_getOutputPinValue(POST_WDT1_PORT, POST_WDT1_PIN) != 0u)
+    if ((P2OUT & BIT2) != 0u)   /* P2.2 — WDT1 output */
     {
         bm |= POST_WDT1_HIGH;
     }
 
-    if (GPIO_getOutputPinValue(POST_WDT2_PORT, POST_WDT2_PIN) != 0u)
+    if ((P3OUT & BIT4) != 0u)   /* P3.4 — WDT2 output */
     {
         bm |= POST_WDT2_HIGH;
     }
