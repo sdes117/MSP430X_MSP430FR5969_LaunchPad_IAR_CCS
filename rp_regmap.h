@@ -232,11 +232,7 @@
 #define MSP_STATUS0_RAIL_3V3_OK     (0x20u)  /* 3V3 rail PG */
 #define MSP_STATUS0_FAULT           (0x80u)  /* any active fault */
 
-/* MSP mode codes (packed into STATUS0 bits [2:0]) */
-#define MSP_MODE_STARTUP    (0x00u)
-#define MSP_MODE_NOMINAL    (0x01u)
-#define MSP_MODE_SAFE       (0x02u)
-#define MSP_MODE_SURVIVAL   (0x03u)
+/* MSP mode codes — defined as msp_mode_t enum in mode_state_machine.h */
 
 /* --- MODE_CMD at 0x28 (M->R) ---
  * MSP-requested operating mode for RP. */
