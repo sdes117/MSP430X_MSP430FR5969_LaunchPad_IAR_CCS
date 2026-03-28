@@ -10,6 +10,12 @@
  */
 
 #include <msp430.h>
+/* Force-enable the CRC32 capability guard.  The MSP430FR5969 has CRC32
+ * hardware; this macro should be set by the device header but may not be
+ * present in all CCS toolchain versions.  Must appear before driverlib. */
+#ifndef __MSP430_HAS_CRC32__
+#define __MSP430_HAS_CRC32__
+#endif
 #include "msp_memory_scrub.h"
 #include "fault_counters.h"
 #include "event_logger.h"
