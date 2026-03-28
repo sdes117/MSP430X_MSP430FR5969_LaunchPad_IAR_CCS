@@ -9,6 +9,7 @@
  * At 8 MHz, feeding 32 KB through the hardware register takes < 5 ms.
  */
 
+#include <msp430.h>
 #include "msp_memory_scrub.h"
 #include "fault_counters.h"
 #include "event_logger.h"
