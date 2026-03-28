@@ -6,10 +6,6 @@
  */
 
 #include <msp430.h>
-/* Force-enable the CRC32 capability guard — see msp_memory_scrub.c */
-#ifndef __MSP430_HAS_CRC32__
-#define __MSP430_HAS_CRC32__
-#endif
 #include "msp_update.h"
 #include "msp_memory_scrub.h"
 #include "event_logger.h"
