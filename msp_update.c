@@ -10,7 +10,6 @@
 #include "event_logger.h"
 #include "ground_contact.h"
 #include "driverlib.h"
-#include "crc32.h"
 #include <msp430.h>
 #include <string.h>
 #include <stdint.h>

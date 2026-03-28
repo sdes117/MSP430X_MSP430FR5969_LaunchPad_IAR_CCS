@@ -14,7 +14,6 @@
 #include "event_logger.h"
 #include "ground_contact.h"
 #include "driverlib.h"
-#include "crc32.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <stdint.h>
