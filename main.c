@@ -61,6 +61,9 @@ functionality in an interrupt. */
 #include <msp430.h>
 #include "mcp2515.h"
 
+/* Supervisor includes */
+#include "supervisor_i2c.h"
+
 #include <csp/csp.h>
 
 #include "mission.h"
@@ -80,6 +83,8 @@ static void Init_Clock(void);
 static void Init_ADC(void);
 static void Init_CSP(void);
 static void Init_CAN(void);
+static void Init_I2C(void);
+static void Init_InternalWDT(void);
 
 /*
  * main_blinky() is used when mainCREATE_SIMPLE_BLINKY_DEMO_ONLY is set to 1.
@@ -240,14 +245,20 @@ static void prvSetupHardware( void )
 
     Init_GPIO();
 
-    /* Release RP2350 reset only after core peripherals are initialized. */
-    // GPIO_setOutputHighOnPin(GPIO_PORT_P2, GPIO_PIN6);
     g_boot_stage = 0x0016;
 
+    /* Release RP2350 reset only after core peripherals are initialized. */
+    // GPIO_setOutputHighOnPin(GPIO_PORT_P2, GPIO_PIN6);
+
+
     Init_Clock();
+    Init_I2C();
     //Init_ADC();
     Init_CSP();
     //Init_CAN();
+
+    /* Start internal WDT last — must be serviced by tasks from here on. */
+    Init_InternalWDT();
 
 }
 
@@ -288,9 +299,9 @@ static void Init_GPIO(void)
     GPIO_setAsOutputPin(GPIO_PORT_P2, GPIO_PIN2 | GPIO_PIN4 | GPIO_PIN6 | GPIO_PIN7);
 
 
-    GPIO_setOutputLowOnPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2); // EN_3V3, eFuseA_SHDN
+    GPIO_setOutputLowOnPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2 | GPIO_PIN5); // EN_3V3, eFuseA_SHDN, WDT_MSP2RP
     GPIO_setOutputHighOnPin(GPIO_PORT_P3, GPIO_PIN4); // WDT2
-    GPIO_setAsOutputPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2 | GPIO_PIN4);
+    GPIO_setAsOutputPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2 | GPIO_PIN4 | GPIO_PIN5); // +P3.5 WDT_MSP2RP
 
     GPIO_setOutputLowOnPin(GPIO_PORT_P4, GPIO_PIN4); // RegB_~EN
     GPIO_setAsOutputPin(GPIO_PORT_P4, GPIO_PIN4);
@@ -481,6 +492,25 @@ static void Init_CAN(void)
 
     can_ioctl(MCP2515_OPTION_LOOPBACK, 0);
 
+}
+
+static void Init_I2C(void)
+{
+    supervisor_i2c_init();
+}
+
+/*
+ * Enable the MSP430 internal watchdog timer.
+ * Timeout: SMCLK (8 MHz) / 8192K = ~1.05 s.
+ * Must be serviced (WDT_A_resetTimer) faster than 1 s — the clock task
+ * runs at 1 Hz so it kicks the WDT every 500 ms (2 Hz).
+ */
+static void Init_InternalWDT(void)
+{
+    WDT_A_initWatchdogTimer(__MSP430_BASEADDRESS_WDT_A__,
+                            WDT_A_CLOCKSOURCE_SMCLK,
+                            WDT_A_CLOCKDIVIDER_8192K);
+    WDT_A_start(__MSP430_BASEADDRESS_WDT_A__);
 }
 
 /*-----------------------------------------------------------*/

@@ -88,12 +88,38 @@
 
 #include "csp_extensions.h"
 
+/* Supervisor includes */
+#include "rp_liveness.h"
+#include "supervisor_i2c.h"
+#include "rp_regmap.h"
+#include "fault_counters.h"
+#include "mode_state_machine.h"
+#include "battery_monitor.h"
+#include "ground_contact.h"
+#include "msp_status_publish.h"
+#include "fault_counter_update.h"
+#include "rp_cmd_dispatch.h"
+#include "event_logger.h"
+#include "i2c_census.h"
+#include "timekeeper.h"
+#include "msp_self_test.h"
+#include "power_policy_enforcer.h"
+#include "msp_memory_scrub.h"
+#include "boot_image_manager.h"
+#include "msp_update.h"
+#include "reg_cycle.h"
+#include "efuse_cycle.h"
+#include "eps_3v3_monitor.h"
+
+/* g_last_sysrstiv captured in main.c before SYSRSTIV auto-clears */
+extern volatile uint16_t g_last_sysrstiv;
+
 /* Priorities at which the tasks are created. */
 #define mainQUEUE_RECEIVE_TASK_PRIORITY		( tskIDLE_PRIORITY + 2 )
 #define	mainQUEUE_SEND_TASK_PRIORITY		( tskIDLE_PRIORITY + 1 )
 
-/* The rate at which data is sent to the queue.  This is fixed at 1000ms to implement the watchdog timer. */
-#define mainQUEUE_SEND_FREQUENCY_MS			( pdMS_TO_TICKS( 1000 ) )
+/* Half-period for the clock task; two iterations = 1 s tick and 2 Hz WDT service. */
+#define mainQUEUE_SEND_FREQUENCY_MS			( pdMS_TO_TICKS( 500 ) )
 
 /* WDT pulse periods are in seconds (clock task runs once per second). */
 #define WDT_PULSE_PERIOD_DEFAULT_S          ( 2U )
@@ -278,7 +304,9 @@ void main_blinky( void )
 {
     int error;
 
-    bootCause = SYSRSTIV;
+    /* g_last_sysrstiv was captured in main.c before SYSRSTIV auto-cleared.
+     * Reading SYSRSTIV a second time here would always return 0. */
+    bootCause = g_last_sysrstiv;
 
     if (bootCause <= SYSRSTIV_DOBOR)
     {
@@ -293,6 +321,11 @@ void main_blinky( void )
     }
 
     ++bootCount;
+
+    /* Power-On Self Test: probes I2C bus, sensors, WDT pin states.
+     * Uses g_last_sysrstiv (captured in main.c) because reading SYSRSTIV
+     * in main.c already cleared it before this function is reached. */
+    msp_self_test_run(g_last_sysrstiv, bootCount);
 
     csp_sys_set_reboot(csp_reboot_function);
 
@@ -324,6 +357,51 @@ void main_blinky( void )
 
         xTaskCreate( prvCanTask, "CN", configMINIMAL_STACK_SIZE, NULL, mainQUEUE_RECEIVE_TASK_PRIORITY+2, NULL ); // highest priority
 
+        /* RP2350 liveness monitor (GPIO heartbeat + I2C heartbeat + escalation) */
+        rp_liveness_task_create();
+
+        /* Supervisor mode state machine (0.5 Hz) */
+        mode_state_machine_task_create();
+
+        /* Battery voltage/current (1 Hz) + temperature/heater (5 s) */
+        battery_monitor_task_create();
+
+        /* Ground contact processor + 48-hour deadman */
+        ground_contact_task_create();
+
+        /* MSP status bytes → RP (1 Hz) */
+        msp_status_publish_task_create();
+
+        /* RP fault counter reader (1 Hz) */
+        fault_counter_update_task_create();
+
+        /* Non-RF command dispatch + response collector (10 Hz) */
+        rp_cmd_dispatch_task_create();
+
+        /* FRAM event log flush (60 s) — also creates log mutex */
+        event_log_flush_task_create();
+
+        /* I2C device census (60 s) */
+        i2c_census_task_create();
+
+        /* MSP-local power rail GPIO policy (1 Hz) */
+        power_policy_enforcer_task_create();
+
+        /* Regulator PG monitor + recovery cycling (1 Hz) */
+        reg_cycle_task_create();
+
+        /* eFuse FLT monitor + recovery cycling / eps_current_limit_3v3 (1 Hz) */
+        efuse_cycle_task_create();
+
+        /* Hourly CRC32 memory scrub over code FRAM region */
+        msp_memory_scrub_task_create();
+
+        /* RP boot image confirmation / golden fallback manager (1 Hz) */
+        boot_image_manager_task_create();
+
+        /* EPS 3.3 V rail overcurrent monitor — INA219 @ 0x44 (2 Hz) */
+        eps_3v3_monitor_task_create();
+
 		/* Start the tasks and timer running. */
 		vTaskStartScheduler();
 	}
@@ -351,10 +429,30 @@ struct AppMessage msg;
 
 	for( ;; )
 	{
-		/* Place this task in the blocked state until it is time to run again. */
-		vTaskDelayUntil( &xNextWakeTime, mainQUEUE_SEND_FREQUENCY_MS );
+		/* Place this task in the blocked state until it is time to run again.
+		 * Runs at 1 Hz; WDT_A timeout is ~1.05 s so kicking here gives ~1x margin.
+		 * For the required 2 Hz service rate the kick is also done at the
+		 * half-second point — see the second vTaskDelayUntil call below. */
+		vTaskDelayUntil( &xNextWakeTime, pdMS_TO_TICKS( 500 ) );
+
+		/* --- Half-second WDT kick --- */
+		WDT_A_resetTimer( __MSP430_BASEADDRESS_WDT_A__ );
+
+		vTaskDelayUntil( &xNextWakeTime, pdMS_TO_TICKS( 500 ) );
+
+		/* --- Full second: kick again then do 1 Hz work --- */
+		WDT_A_resetTimer( __MSP430_BASEADDRESS_WDT_A__ );
 
 		++current_second;
+
+		/* Advance FRAM-persistent Unix time counter (1 Hz tick) */
+		timekeeper_tick_1hz();
+
+		/* Advance fault counter decay timer (1 Hz tick) */
+		fault_tick_1hz();
+
+		/* Advance 48-hour deadman timer (1 Hz tick) */
+		ground_contact_tick_1hz();
 
 		/* Send to the queue - causing the queue receive task to unblock and
 		toggle the LED.  0 is used as the block time so the sending operation
@@ -364,12 +462,14 @@ struct AppMessage msg;
 		msg.pvData = 0;
 		xQueueSend( xQueue, &msg, 0U );
 
+        /* Legacy 24-hour ground watchdog commented out.
+         * The 48-hour deadman in ground_contact_tick_1hz() is authoritative.
         if(--wd_timeout <= 0)
         {
-            /* trigger ground watchdog reboot */
-           ++wd_count;
-           PMM_trigPOR();
+            ++wd_count;
+            PMM_trigPOR();
         }
+        */
   	}
 }
 /*-----------------------------------------------------------*/
@@ -507,6 +607,10 @@ static void prvQueueReceiveTask( void *pvParameters )
 
                 case CSP_TSYNC:
                     handle_csp_timesync(conn,packet);
+                    break;
+
+                case CSP_MSP_UPDATE:
+                    handle_csp_msp_update(conn, packet);
                     break;
 
                 default:
@@ -741,6 +845,8 @@ void handle_csp_timesync(csp_conn_t * conn, csp_packet_t * packet)
             memcpy(&now, &packet->data[1], sizeof(int32_t));
             //now = csp_ntoh32(now);
             current_second = now;
+            /* Also update the FRAM-persistent Unix time with bounds check */
+            (void)timekeeper_set((uint32_t)now);
             //ts.tv_sec = le32toh(now);
             //ts.tv_nsec = 0;
             packet->data[1] = 0; //csp_clock_set_time(&ts);

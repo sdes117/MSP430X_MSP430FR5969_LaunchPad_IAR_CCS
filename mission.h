@@ -22,5 +22,8 @@
 #define CSP_BUFF_PORT 20
 #define PC_BUFF_PORT 26
 
+/* MSP firmware OTA update port */
+#define CSP_MSP_UPDATE 22
+
 
 #endif /* MISSION_H_ */

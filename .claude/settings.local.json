@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \":*)",
+      "Bash(grep -E \"U[0-9]{1,2}\")",
+      "Bash(python -c \"import docx; doc = docx.Document\\(''c:/Users/desai/OneDrive - The University of Auckland/2025/Masters/HIA_Code/Context/msp_RP_I2C_FDIR.docx''\\); [print\\(p.text\\) for p in doc.paragraphs]\")",
+      "Bash(python -m pip list)",
+      "Bash(cd /tmp)",
+      "Bash(unzip -q \"c:/Users/desai/OneDrive - The University of Auckland/2025/Masters/HIA_Code/Context/msp_RP_I2C_FDIR.docx\" -d docx_content)"
+    ]
+  }
+}

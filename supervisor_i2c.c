@@ -1,0 +1,220 @@
+/*
+ * supervisor_i2c.c
+ *
+ * Polling I2C master driver for MSP430FR UCB0.
+ * See supervisor_i2c.h for full description.
+ */
+
+#include "supervisor_i2c.h"
+#include "FreeRTOS.h"
+#include "semphr.h"
+#include "driverlib.h"
+#include <msp430.h>
+
+/* ------------------------------------------------------------------
+ * Internal helpers
+ * ------------------------------------------------------------------ */
+
+/*
+ * Wait for condition (register & mask) == expected.
+ * On timeout or NACK: set local `rc` to the error code and jump to `lbl`.
+ * Using goto avoids embedded `return` statements that would skip mutex release.
+ */
+#define I2C_SW_TIMEOUT_ITERS    (100000UL)
+
+#define WAIT_OR_GOTO(reg, mask, expected, err_code, lbl)         \
+    do {                                                           \
+        uint32_t _wt = I2C_SW_TIMEOUT_ITERS;                      \
+        while (((reg) & (mask)) != (expected)) {                   \
+            if (--_wt == 0UL) { rc = (err_code); goto lbl; }      \
+            if (UCB0IFG & UCNACKIFG) {                             \
+                UCB0CTLW0 |= UCTXSTP;                             \
+                UCB0IFG &= (uint16_t)~UCNACKIFG;                  \
+                rc = I2C_ERR_NACK; goto lbl;                       \
+            }                                                      \
+        }                                                          \
+    } while (0)
+
+#define WAIT_TXIFG(lbl)   WAIT_OR_GOTO(UCB0IFG,   UCTXIFG0, UCTXIFG0, I2C_ERR_TIMEOUT, lbl)
+#define WAIT_RXIFG(lbl)   WAIT_OR_GOTO(UCB0IFG,   UCRXIFG0, UCRXIFG0, I2C_ERR_TIMEOUT, lbl)
+#define WAIT_STOP(lbl)    WAIT_OR_GOTO(UCB0CTLW0, UCTXSTP,  0,        I2C_ERR_TIMEOUT, lbl)
+#define WAIT_START(lbl)   WAIT_OR_GOTO(UCB0CTLW0, UCTXSTT,  0,        I2C_ERR_TIMEOUT, lbl)
+
+/* ------------------------------------------------------------------
+ * I2C bus mutex — serialises access from all tasks on the shared bus.
+ * ------------------------------------------------------------------ */
+static SemaphoreHandle_t xI2CMutex = NULL;
+
+/* ------------------------------------------------------------------
+ * Public functions
+ * ------------------------------------------------------------------ */
+
+void supervisor_i2c_init(void)
+{
+    EUSCI_B_I2C_initMasterParam param = {
+        .selectClockSource    = EUSCI_B_I2C_CLOCKSOURCE_SMCLK,
+        .i2cClk               = 8000000UL,
+        .dataRate             = EUSCI_B_I2C_SET_DATA_RATE_400KBPS,
+        .byteCounterThreshold = 0u,
+        .autoSTOPGeneration   = EUSCI_B_I2C_NO_AUTO_STOP
+    };
+    EUSCI_B_I2C_initMaster(EUSCI_B0_BASE, &param);
+
+    /* Enable hardware clock-low timeout (~31 ms) to prevent bus hang. */
+    EUSCI_B_I2C_setTimeout(EUSCI_B0_BASE, EUSCI_B_I2C_TIMEOUT_31_MS);
+
+    EUSCI_B_I2C_enable(EUSCI_B0_BASE);
+
+    xI2CMutex = xSemaphoreCreateMutex();
+    configASSERT(xI2CMutex != NULL);
+}
+
+int8_t i2c_write_reg(uint8_t addr, uint8_t reg, const uint8_t *data, uint8_t len)
+{
+    int8_t  rc = I2C_OK;
+    uint8_t i;
+
+    if ((data == (void *)0) || (len == 0u)) {
+        return I2C_ERR_ARG;
+    }
+
+    if (xSemaphoreTake(xI2CMutex, pdMS_TO_TICKS(200u)) != pdTRUE) {
+        return I2C_ERR_BUSY;
+    }
+
+    if (EUSCI_B_I2C_isBusBusy(EUSCI_B0_BASE) == EUSCI_B_I2C_BUS_BUSY) {
+        rc = I2C_ERR_BUSY;
+        goto done;
+    }
+
+    EUSCI_B_I2C_setSlaveAddress(EUSCI_B0_BASE, addr);
+    EUSCI_B_I2C_setMode(EUSCI_B0_BASE, EUSCI_B_I2C_TRANSMIT_MODE);
+
+    UCB0IFG &= (uint16_t)~(UCTXIFG0 | UCNACKIFG);
+    UCB0CTLW0 |= UCTR | UCTXSTT;
+
+    WAIT_TXIFG(done);
+    UCB0TXBUF = reg;
+
+    for (i = 0u; i < len; i++) {
+        WAIT_TXIFG(done);
+        UCB0TXBUF = data[i];
+    }
+
+    WAIT_TXIFG(done);
+    UCB0CTLW0 |= UCTXSTP;
+    WAIT_STOP(done);
+
+done:
+    xSemaphoreGive(xI2CMutex);
+    return rc;
+}
+
+int8_t i2c_read_reg(uint8_t addr, uint8_t reg, uint8_t *buf, uint8_t len)
+{
+    int8_t  rc = I2C_OK;
+    uint8_t i;
+
+    if ((buf == (void *)0) || (len == 0u)) {
+        return I2C_ERR_ARG;
+    }
+
+    if (xSemaphoreTake(xI2CMutex, pdMS_TO_TICKS(200u)) != pdTRUE) {
+        return I2C_ERR_BUSY;
+    }
+
+    if (EUSCI_B_I2C_isBusBusy(EUSCI_B0_BASE) == EUSCI_B_I2C_BUS_BUSY) {
+        rc = I2C_ERR_BUSY;
+        goto done;
+    }
+
+    EUSCI_B_I2C_setSlaveAddress(EUSCI_B0_BASE, addr);
+
+    /* --- Phase 1: write register address (TX) --- */
+    EUSCI_B_I2C_setMode(EUSCI_B0_BASE, EUSCI_B_I2C_TRANSMIT_MODE);
+    UCB0IFG &= (uint16_t)~(UCTXIFG0 | UCNACKIFG);
+    UCB0CTLW0 |= UCTR | UCTXSTT;
+
+    WAIT_TXIFG(done);
+    UCB0TXBUF = reg;
+    WAIT_TXIFG(done);  /* wait for reg byte to shift out before repeated START */
+
+    /* --- Phase 2: repeated START, switch to RX --- */
+    EUSCI_B_I2C_setMode(EUSCI_B0_BASE, EUSCI_B_I2C_RECEIVE_MODE);
+
+    if (len == 1u) {
+        UCB0CTLW0 |= UCTXSTT;
+        WAIT_START(done);
+        UCB0CTLW0 |= UCTXSTP;
+        WAIT_RXIFG(done);
+        buf[0] = UCB0RXBUF;
+        WAIT_STOP(done);
+        goto done;
+    }
+
+    UCB0CTLW0 |= UCTXSTT;
+
+    for (i = 0u; i < (uint8_t)(len - 1u); i++) {
+        WAIT_RXIFG(done);
+        if (i == (uint8_t)(len - 2u)) {
+            UCB0CTLW0 |= UCTXSTP;
+        }
+        buf[i] = UCB0RXBUF;
+    }
+
+    WAIT_RXIFG(done);
+    buf[len - 1u] = UCB0RXBUF;
+    WAIT_STOP(done);
+
+done:
+    xSemaphoreGive(xI2CMutex);
+    return rc;
+}
+
+void i2c_bus_recover(void)
+{
+    uint8_t i;
+
+    /* Take the mutex so no other task issues a transaction during bit-bang. */
+    if (xI2CMutex != NULL) {
+        (void)xSemaphoreTake(xI2CMutex, pdMS_TO_TICKS(200u));
+    }
+
+    /* Temporarily reconfigure P1.6/P1.7 as GPIO to bit-bang 9 CLK pulses */
+    EUSCI_B_I2C_disable(EUSCI_B0_BASE);
+
+    /* P1.7 = SCL as output high, P1.6 = SDA as input */
+    P1DIR  |=  BIT7;
+    P1DIR  &= (uint8_t)~BIT6;
+    P1SEL0 &= (uint8_t)~(BIT6 | BIT7);
+    P1SEL1 &= (uint8_t)~(BIT6 | BIT7);
+    P1OUT  |=  BIT7;
+
+    for (i = 0u; i < 9u; i++) {
+        P1OUT &= (uint8_t)~BIT7;   /* SCL low */
+        __delay_cycles(40u);        /* ~5 µs at 8 MHz */
+        P1OUT |=  BIT7;             /* SCL high */
+        __delay_cycles(40u);
+        if (P1IN & BIT6) {          /* SDA released? */
+            break;
+        }
+    }
+
+    /* Generate STOP: SDA low → SCL high → SDA high */
+    P1DIR |= BIT6;
+    P1OUT &= (uint8_t)~BIT6;
+    __delay_cycles(40u);
+    P1OUT |= BIT7;
+    __delay_cycles(40u);
+    P1OUT |= BIT6;
+    __delay_cycles(40u);
+
+    /* Restore peripheral function */
+    P1SEL0 |= BIT6 | BIT7;
+
+    EUSCI_B_I2C_enable(EUSCI_B0_BASE);
+
+    if (xI2CMutex != NULL) {
+        xSemaphoreGive(xI2CMutex);
+    }
+}
