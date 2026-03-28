@@ -5,13 +5,13 @@
  * See msp_update.h for full description.
  */
 
-#include <msp430.h>
 #include "msp_update.h"
 #include "msp_memory_scrub.h"
 #include "event_logger.h"
 #include "ground_contact.h"
 #include "driverlib.h"
 #include "crc32.h"
+#include <msp430.h>
 #include <string.h>
 #include <stdint.h>
 
