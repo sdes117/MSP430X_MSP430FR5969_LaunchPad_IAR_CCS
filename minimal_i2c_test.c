@@ -16,8 +16,22 @@
 #include <stdint.h>
 #include "supervisor_i2c.h"
 
-/* INA219 at address 0x44 */
-#define INA219_ADDR         (0x44u)
+/*
+ * INA219 I2C addresses to scan.
+ * g_ina_found_addr is set to whichever address ACKs first.
+ * Check this in the CCS debugger if the LED is fast-blinking.
+ *   0x40 = BATTERY
+ *   0x41 = 3.3V_MSP REG
+ *   0x44 = 3V3 REG (RP supply)
+ *   0x45 = MEM QSPI PWR SWITCH
+ */
+static const uint8_t k_scan_addrs[] = { 0x41u, 0x40u, 0x44u, 0x45u };
+#define NUM_SCAN_ADDRS  (sizeof(k_scan_addrs) / sizeof(k_scan_addrs[0]))
+
+volatile uint8_t g_ina_found_addr = 0u; /* set to ACKing address; 0 = none found */
+
+/* Active address used after scan */
+#define INA219_ADDR         (g_ina_found_addr)
 #define INA219_REG_CONFIG   (0x00u)
 #define INA219_REG_SHUNT_V  (0x01u)
 #define INA219_REG_BUS_V    (0x02u)
@@ -284,37 +298,63 @@ static void led_off(void)
  * ============================================================ */
 void main_minimal_i2c_test(void)
 {
-    int8_t rc;
+    uint8_t i;
+    int8_t  rc;
     uint8_t detected = 0;
-    
-    /* Probe INA219 by reading config register */
-    rc = ina_read_reg16(INA219_REG_CONFIG, &g_ina_config);
-    g_ina_status = rc;
-    
-    if (rc == I2C_OK) {
-        /* INA219 detected! Initialize it */
-        detected = 1;
-        ina_init();
+
+    /* ------------------------------------------------------------------
+     * Scan known INA219 addresses.
+     * The schematic has INA219s at 0x40, 0x41, 0x44, 0x45.
+     * We try all of them so the test works regardless of which sensor is
+     * physically present.  g_ina_found_addr is readable in the debugger.
+     * ------------------------------------------------------------------ */
+    for (i = 0u; i < (uint8_t)NUM_SCAN_ADDRS; i++)
+    {
+        WDT_A_resetTimer(__MSP430_BASEADDRESS_WDT_A__);
+        uint8_t buf[2] = {0u, 0u};
+        if (prv_i2c_read(k_scan_addrs[i], INA219_REG_CONFIG, buf, 2u) == I2C_OK)
+        {
+            g_ina_found_addr = k_scan_addrs[i];
+            g_ina_config = ((uint16_t)buf[0] << 8u) | (uint16_t)buf[1];
+            detected = 1u;
+            g_ina_status = I2C_OK;
+            ina_init();
+            break;
+        }
     }
-    
+
+    if (!detected)
+    {
+        g_ina_status = I2C_ERR_NACK;  /* No INA219 found at any address */
+    }
+
     /* Main loop */
-    while (1) {
-        if (detected) {
-            /* Slow blink (1Hz) + continuous reading */
+    while (1)
+    {
+        /* Service internal WDT (~1.05 s timeout) to prevent reset */
+        WDT_A_resetTimer(__MSP430_BASEADDRESS_WDT_A__);
+
+        if (detected)
+        {
+            /* Slow blink (1 Hz) + continuous reading */
             led_on();
             delay_ms(500);
-            
-            /* Read INA219 values */
+
+            WDT_A_resetTimer(__MSP430_BASEADDRESS_WDT_A__);
+
             rc = ina_read_values();
             g_ina_status = rc;
-            if (rc == I2C_OK) {
+            if (rc == I2C_OK)
+            {
                 g_ina_read_count++;
             }
-            
+
             led_off();
             delay_ms(500);
-        } else {
-            /* Fast blink (4Hz) - INA219 not found */
+        }
+        else
+        {
+            /* Fast blink (4 Hz) — no INA219 found at any scanned address */
             led_on();
             delay_ms(125);
             led_off();
