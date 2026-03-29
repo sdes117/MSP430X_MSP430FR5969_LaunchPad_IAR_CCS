@@ -47,6 +47,23 @@ volatile uint8_t g_ina_found_addr = 0u; /* set to ACKing address; 0 = none found
 #define INA219_BUS_V_LSB_MV (4u)
 
 /* ============================================================
+ * GPIO control — set these in the CCS debugger Expressions window,
+ * then the main loop applies them on the next iteration.
+ *
+ * Rail enable signals:
+ *   g_reg_a_en   : 1 = enable RegA  (P2.4 LOW),  0 = disable (P2.4 HIGH)
+ *   g_reg_b_en   : 1 = enable RegB  (P4.4 LOW),  0 = disable (P4.4 HIGH)
+ *   g_efuse_a_en : 1 = enable eFuseA (P3.2 LOW),  0 = shutdown (P3.2 HIGH)
+ *   g_efuse_b_en : 1 = enable eFuseB (P1.5 LOW),  0 = shutdown (P1.5 HIGH)
+ *
+ * Default: all enabled (regulators on, eFuses not in shutdown).
+ * ============================================================ */
+volatile uint8_t g_reg_a_en   = 1u;  /* RegA_~EN   P2.4  (~EN: low=on, high=off) */
+volatile uint8_t g_reg_b_en   = 1u;  /* RegB_~EN   P4.4  (~EN: low=on, high=off) */
+volatile uint8_t g_efuse_a_en = 1u;  /* eFuseA_SHDN P3.2 (SHDN: high=off, low=on) */
+volatile uint8_t g_efuse_b_en = 1u;  /* eFuseB_SHDN P1.5 (SHDN: high=off, low=on) */
+
+/* ============================================================
  * Global variables for CCS debugger inspection
  * ============================================================ */
 volatile int8_t  g_ina_status = -99;      /* I2C result code */
@@ -273,6 +290,40 @@ static int8_t ina_read_values(void)
 }
 
 /* ============================================================
+ * Rail enable/disable
+ * ============================================================ */
+static void apply_rail_enables(void)
+{
+    /* RegA_~EN  P2.4 — active low: drive LOW to enable, HIGH to disable */
+    if (g_reg_a_en) {
+        GPIO_setOutputLowOnPin(GPIO_PORT_P2, GPIO_PIN4);
+    } else {
+        GPIO_setOutputHighOnPin(GPIO_PORT_P2, GPIO_PIN4);
+    }
+
+    /* RegB_~EN  P4.4 — active low */
+    if (g_reg_b_en) {
+        GPIO_setOutputLowOnPin(GPIO_PORT_P4, GPIO_PIN4);
+    } else {
+        GPIO_setOutputHighOnPin(GPIO_PORT_P4, GPIO_PIN4);
+    }
+
+    /* eFuseA_SHDN  P3.2 — active high: drive HIGH to shutdown, LOW to enable */
+    if (g_efuse_a_en) {
+        GPIO_setOutputLowOnPin(GPIO_PORT_P3, GPIO_PIN2);
+    } else {
+        GPIO_setOutputHighOnPin(GPIO_PORT_P3, GPIO_PIN2);
+    }
+
+    /* eFuseB_SHDN  P1.5 — active high */
+    if (g_efuse_b_en) {
+        GPIO_setOutputLowOnPin(GPIO_PORT_P1, GPIO_PIN5);
+    } else {
+        GPIO_setOutputHighOnPin(GPIO_PORT_P1, GPIO_PIN5);
+    }
+}
+
+/* ============================================================
  * LED control and delay
  * ============================================================ */
 static void delay_ms(uint16_t ms)
@@ -328,11 +379,17 @@ void main_minimal_i2c_test(void)
         g_ina_status = I2C_ERR_NACK;  /* No INA219 found at any address */
     }
 
+    /* Apply initial rail state before entering the loop */
+    apply_rail_enables();
+
     /* Main loop */
     while (1)
     {
         /* Service internal WDT (~1.05 s timeout) to prevent reset */
         WDT_A_resetTimer(__MSP430_BASEADDRESS_WDT_A__);
+
+        /* Apply any rail enable changes made in the debugger */
+        apply_rail_enables();
 
         if (detected)
         {
