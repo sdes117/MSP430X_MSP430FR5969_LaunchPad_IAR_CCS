@@ -68,9 +68,12 @@ functionality in an interrupt. */
 
 #include "mission.h"
 
-/* Set mainCREATE_SIMPLE_BLINKY_DEMO_ONLY to one to run the simple blinky demo,
-or 0 to run the more comprehensive test and demo application. */
-#define mainCREATE_SIMPLE_BLINKY_DEMO_ONLY	1
+/* Set mainDEMO_TYPE to select which demo to run:
+   0 = comprehensive test and demo application (main_full)
+   1 = simple blinky demo (main_blinky) 
+   2 = minimal I2C test (main_minimal_i2c_test) - bare metal, no FreeRTOS
+*/
+#define mainDEMO_TYPE	2
 
 /*-----------------------------------------------------------*/
 
@@ -87,14 +90,14 @@ static void Init_I2C(void);
 static void Init_InternalWDT(void);
 
 /*
- * main_blinky() is used when mainCREATE_SIMPLE_BLINKY_DEMO_ONLY is set to 1.
- * main_full() is used when mainCREATE_SIMPLE_BLINKY_DEMO_ONLY is set to 0.
+ * Demo entry points:
+ * main_blinky() is used when mainDEMO_TYPE == 1
+ * main_full() is used when mainDEMO_TYPE == 0
+ * main_minimal_i2c_test() is used when mainDEMO_TYPE == 2
  */
-#if( mainCREATE_SIMPLE_BLINKY_DEMO_ONLY == 1 )
-	extern void main_blinky( void );
-#else
-	extern void main_full( void );
-#endif /* #if mainCREATE_SIMPLE_BLINKY_DEMO_ONLY == 1 */
+extern void main_blinky( void );
+extern void main_full( void );
+extern void main_minimal_i2c_test( void );
 
 /* Prototypes for the standard FreeRTOS callback/hook functions implemented
 within this file. */
@@ -140,9 +143,13 @@ int main( void )
 	/* Configure the hardware ready to run the demo. */
 	prvSetupHardware();
 
-	/* The mainCREATE_SIMPLE_BLINKY_DEMO_ONLY setting is described at the top
-	of this file. */
-	#if( mainCREATE_SIMPLE_BLINKY_DEMO_ONLY == 1 )
+	/* Select demo based on mainDEMO_TYPE (see top of file) */
+	#if( mainDEMO_TYPE == 2 )
+	{
+		/* Minimal I2C test - bypasses FreeRTOS, runs bare metal */
+		main_minimal_i2c_test();
+	}
+	#elif( mainDEMO_TYPE == 1 )
 	{
 		main_blinky();
 	}
