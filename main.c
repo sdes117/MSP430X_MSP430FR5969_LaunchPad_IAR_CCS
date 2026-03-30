@@ -200,9 +200,8 @@ void vApplicationIdleHook( void )
 
 void vApplicationTickHook( void )
 {
-	#if( mainDEMO_TYPE == 0 )
+	#if( mainCREATE_SIMPLE_BLINKY_DEMO_ONLY == 0 )
 	{
-		/* These helper demos are only initialized by main_full(). */
 		/* Call the periodic event group from ISR demo. */
 		vPeriodicEventGroupsProcessing();
 
