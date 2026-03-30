@@ -65,6 +65,9 @@ functionality in an interrupt. */
 
 #include "mission.h"
 
+/* Supervisor includes */
+#include "supervisor_i2c.h"
+
 /* Set mainCREATE_SIMPLE_BLINKY_DEMO_ONLY to one to run the simple blinky demo,
 or 0 to run the more comprehensive test and demo application. */
 #define mainCREATE_SIMPLE_BLINKY_DEMO_ONLY	1
@@ -80,6 +83,7 @@ static void Init_Clock(void);
 static void Init_ADC(void);
 static void Init_CSP(void);
 static void Init_CAN(void);
+static void Init_I2C(void);
 
 /*
  * main_blinky() is used when mainCREATE_SIMPLE_BLINKY_DEMO_ONLY is set to 1.
@@ -181,7 +185,10 @@ void vApplicationStackOverflowHook( TaskHandle_t pxTask, char *pcTaskName )
 
 void vApplicationIdleHook( void )
 {
-    __bis_SR_register( LPM4_bits + GIE );
+    /* LPM0: CPU off, SMCLK stays active.
+     * LPM3/4 would stop SMCLK and freeze Timer A0 (FreeRTOS tick source),
+     * hanging the scheduler permanently. */
+    __bis_SR_register( LPM0_bits + GIE );
     __no_operation();
 }
 /*-----------------------------------------------------------*/
@@ -245,8 +252,13 @@ static void prvSetupHardware( void )
     g_boot_stage = 0x0016;
 
     Init_Clock();
+    Init_I2C();
     //Init_ADC();
+    /* CSP allocates ~4 KB of FreeRTOS heap (10 × 256-byte buffers).
+     * Only initialise it for the full demo to keep heap free for supervisor tasks. */
+#if( mainCREATE_SIMPLE_BLINKY_DEMO_ONLY == 0 )
     Init_CSP();
+#endif
     //Init_CAN();
 
 }
@@ -481,6 +493,11 @@ static void Init_CAN(void)
 
     can_ioctl(MCP2515_OPTION_LOOPBACK, 0);
 
+}
+
+static void Init_I2C(void)
+{
+    supervisor_i2c_init();
 }
 
 /*-----------------------------------------------------------*/
