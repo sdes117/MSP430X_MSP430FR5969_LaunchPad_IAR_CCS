@@ -81,15 +81,23 @@ volatile uint8_t g_efusea_en = 1u;
 volatile uint8_t g_efuseb_en = 1u;
 
 /* ------------------------------------------------------------------
- * Shared INA219 result — stored in FRAM so values survive full power-off.
- * Inspect g_ina_data after standalone run (no JTAG/VCC_TOOL) to see
- * real shunt current when powered from the VBATT path.
+ * Shared INA219 result — live working copy in RAM (volatile, lost on reset).
  * ------------------------------------------------------------------ */
-#pragma NOINIT(g_ina_data)
-ina219_data_t g_ina_data;           /* shunt_uv, bus_mv, current_ma, power_mw */
+volatile ina219_data_t g_ina_data = { 0, 0, 0, 0 };
+volatile uint8_t       g_ina_ok   = 0u;  /* 1 = last read succeeded */
 
-#pragma NOINIT(g_ina_ok)
-uint8_t g_ina_ok;                   /* 1 = last read succeeded */
+/* ------------------------------------------------------------------
+ * FRAM snapshot — only written on a confirmed successful read.
+ * Survives full power-off. Safe to inspect after JTAG reconnect because
+ * the INA task only touches this when ina219_read() returns INA219_OK.
+ * If the INA219 has no power on reconnect, init NACKs → snapshot unchanged.
+ * Read g_ina_snapshot (not g_ina_data) in the debugger after a standalone run.
+ * ------------------------------------------------------------------ */
+#pragma NOINIT(g_ina_snapshot)
+ina219_data_t g_ina_snapshot;       /* last confirmed good reading */
+
+#pragma NOINIT(g_ina_snapshot_ok)
+uint8_t g_ina_snapshot_ok;          /* 1 = g_ina_snapshot contains valid data */
 
 /* ------------------------------------------------------------------
  * Internal state
@@ -249,8 +257,10 @@ static void prvInaTask(void *pvParameters)
         /* Read all four data registers */
         if (ina219_read(&g_ina_3v3_msp, &data) == INA219_OK)
         {
-            g_ina_data = data;
-            g_ina_ok   = 1u;
+            g_ina_data        = data;
+            g_ina_ok          = 1u;
+            g_ina_snapshot    = data;   /* persist to FRAM — only on confirmed read */
+            g_ina_snapshot_ok = 1u;
         }
         else
         {
