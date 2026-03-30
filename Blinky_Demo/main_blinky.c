@@ -81,10 +81,15 @@ volatile uint8_t g_efusea_en = 1u;
 volatile uint8_t g_efuseb_en = 1u;
 
 /* ------------------------------------------------------------------
- * Shared INA219 result (written by INA task, read by CLK for RP publish)
+ * Shared INA219 result — stored in FRAM so values survive full power-off.
+ * Inspect g_ina_data after standalone run (no JTAG/VCC_TOOL) to see
+ * real shunt current when powered from the VBATT path.
  * ------------------------------------------------------------------ */
-volatile ina219_data_t g_ina_data   = { 0, 0, 0, 0 };
-volatile uint8_t       g_ina_ok     = 0u;  /* 1 = last read succeeded */
+#pragma NOINIT(g_ina_data)
+ina219_data_t g_ina_data;           /* shunt_uv, bus_mv, current_ma, power_mw */
+
+#pragma NOINIT(g_ina_ok)
+uint8_t g_ina_ok;                   /* 1 = last read succeeded */
 
 /* ------------------------------------------------------------------
  * Internal state
