@@ -14,11 +14,13 @@
 #include <stdint.h>
 
 /* ------------------------------------------------------------------
- * Default I2C address (A0=GND, A1=GND → 0x40).
+ * Default I2C address.
+ * Dev board: 0x41 (3.3V_MSP REG — the physically present INA219).
+ * Flight board: change to 0x40 (BATTERY) when that sensor is wired.
  * Override with INA219_ADDR define before including if different.
  * ------------------------------------------------------------------ */
 #ifndef INA219_ADDR
-#define INA219_ADDR             (0x40u)
+#define INA219_ADDR             (0x41u)
 #endif
 
 /* ------------------------------------------------------------------

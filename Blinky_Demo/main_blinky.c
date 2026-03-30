@@ -322,6 +322,10 @@ void main_blinky( void )
 
     ++bootCount;
 
+    /* Create the event log mutex before any event_log_write() call so the
+     * boot event from msp_self_test_run() is not silently dropped. */
+    event_log_init();
+
     /* Power-On Self Test: probes I2C bus, sensors, WDT pin states.
      * Uses g_last_sysrstiv (captured in main.c) because reading SYSRSTIV
      * in main.c already cleared it before this function is reached. */
@@ -509,8 +513,9 @@ static void prvQueueReceiveTask( void *pvParameters )
             {
                 tlm_counter = 0;
                 ADCtime = current_second;
-                /* Enable and Start Single Conversion Mode for channel 0: */
+#if 0   /* Init_ADC() is commented out — do not start conversion on uninitialised ADC */
                 ADC12_B_startConversion(ADC12_B_BASE, ADC12_B_START_AT_ADC12MEM0, ADC12_B_SEQOFCHANNELS);
+#endif
             }
 
             if(tlm_duration > 0)

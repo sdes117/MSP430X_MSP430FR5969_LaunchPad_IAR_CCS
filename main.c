@@ -73,7 +73,7 @@ functionality in an interrupt. */
    1 = simple blinky demo (main_blinky) 
    2 = minimal I2C test (main_minimal_i2c_test) - bare metal, no FreeRTOS
 */
-#define mainDEMO_TYPE	2
+#define mainDEMO_TYPE	1
 
 /*-----------------------------------------------------------*/
 

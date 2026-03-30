@@ -86,6 +86,13 @@ uint16_t event_log_count(void);
 uint16_t event_log_read(uint16_t offset, uint8_t *out_buf, uint16_t max_count);
 
 /*
+ * Create the log mutex. Must be called once after the FreeRTOS heap is
+ * initialised but before any event_log_write() call (i.e. before
+ * msp_self_test_run()). The flush task will skip re-creating it.
+ */
+void event_log_init(void);
+
+/*
  * Task creation for the flush task.
  */
 void event_log_flush_task_create(void);

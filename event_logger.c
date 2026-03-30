@@ -144,6 +144,20 @@ void event_log_request_flush(void)
 }
 
 /* ------------------------------------------------------------------
+ * Early init: create the mutex before the scheduler starts so that
+ * event_log_write() calls from msp_self_test_run() are not dropped.
+ * ------------------------------------------------------------------ */
+
+void event_log_init(void)
+{
+    if (xLogMutex == NULL)
+    {
+        xLogMutex = xSemaphoreCreateMutex();
+        configASSERT(xLogMutex != NULL);
+    }
+}
+
+/* ------------------------------------------------------------------
  * Flush task: push recent log entries to RP via command mailbox
  * ------------------------------------------------------------------ */
 
@@ -153,9 +167,12 @@ static void prvEventLogFlushTask(void *pvParameters)
 
     (void)pvParameters;
 
-    /* Create mutex once before entering loop */
-    xLogMutex = xSemaphoreCreateMutex();
-    configASSERT(xLogMutex != NULL);
+    /* Create mutex if event_log_init() was not called before the scheduler */
+    if (xLogMutex == NULL)
+    {
+        xLogMutex = xSemaphoreCreateMutex();
+        configASSERT(xLogMutex != NULL);
+    }
 
     for (;;)
     {
