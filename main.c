@@ -264,8 +264,9 @@ static void prvSetupHardware( void )
     Init_CSP();
     //Init_CAN();
 
-    /* Start internal WDT last — must be serviced by tasks from here on. */
-    Init_InternalWDT();
+    /* Internal WDT disabled during dev-board bring-up.
+     * Re-enable Init_InternalWDT() once task scheduling is confirmed stable. */
+    /* Init_InternalWDT(); */
 
 }
 

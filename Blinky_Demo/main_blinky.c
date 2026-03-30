@@ -89,24 +89,16 @@
 #include "csp_extensions.h"
 
 /* Supervisor includes */
-#include "rp_liveness.h"
 #include "supervisor_i2c.h"
 #include "rp_regmap.h"
 #include "fault_counters.h"
 #include "mode_state_machine.h"
 #include "battery_monitor.h"
-#include "ground_contact.h"
-#include "msp_status_publish.h"
-#include "fault_counter_update.h"
-#include "rp_cmd_dispatch.h"
 #include "event_logger.h"
 #include "i2c_census.h"
 #include "timekeeper.h"
-#include "msp_self_test.h"
 #include "power_policy_enforcer.h"
-#include "msp_memory_scrub.h"
-#include "boot_image_manager.h"
-#include "msp_update.h"
+#include "msp_status_publish.h"
 #include "reg_cycle.h"
 #include "efuse_cycle.h"
 #include "eps_3v3_monitor.h"
@@ -175,11 +167,8 @@ extern int frame_tx_count;
  * main.c.
  */
 void main_blinky( void );
-void can_tx_next_packet(BaseType_t *ptask_woken);
-void handle_csp_tlm_request(csp_conn_t * conn, csp_packet_t * packet);
 void handle_csp_timesync(csp_conn_t * conn, csp_packet_t * packet);
 int  csp_reboot_function(void);
-void can_start_tx(void);
 static inline void prvPulseWdt1(void);
 static inline void prvPulseWdt2(void);
 static inline void prvForceWdtLine(uint8_t line, uint8_t level_high);
@@ -189,52 +178,22 @@ static inline void prvForceWdtLine(uint8_t line, uint8_t level_high);
  */
 static void prvQueueReceiveTask( void *pvParameters );
 static void prvClockTask( void *pvParameters );
-static void prvCanTask( void *pvParameters );
 
 /*-----------------------------------------------------------*/
 
 /* The queue used by both tasks. */
 static QueueHandle_t xQueue = NULL;
-static QueueHandle_t xCanQueue = NULL;
 
-struct AppMessage ADCResult = {0};
-struct AppMessage CANflag = {0};
-
-uint32_t rid;
-uint32_t ridbuf[4];
-uint8_t nirq = 0;
-uint8_t mext;
-uint8_t eflag;
-uint8_t irq, buf[8];
-uint16_t ADCdata[16];
-uint32_t ADCtime;
-uint8_t wakecount = 0;
-uint8_t errorcount = 0;
 #pragma NOINIT(bootCount)
 uint16_t bootCount;
 #pragma NOINIT(bootCause)
 uint16_t bootCause;
-uint32_t uptime= 0;
-uint32_t wd_timeout = 86400;
 #pragma NOINIT(wd_count)
 uint16_t wd_count;
 uint16_t rx_csp = 0;
-uint16_t tx_csp = 0;
-
-
-#define DEFAULT_TLM_PERIOD (30)
-
-uint32_t tlm_period = DEFAULT_TLM_PERIOD;
-uint32_t tlm_duration = 0;
-uint32_t tlm_counter = 0;
 
 volatile uint32_t wdt1_pulse_period_s = WDT_PULSE_PERIOD_DEFAULT_S;
 volatile uint32_t wdt2_pulse_period_s = WDT_PULSE_PERIOD_DEFAULT_S;
-
-csp_iface_t * default_interface = NULL;
-csp_conn_t *conn = NULL;
-
-uint8_t tlm_pkt[MAX_TLM_PACKET_SIZE] = {0,};
 
 #pragma NOINIT(current_second)
 uint32_t current_second;
@@ -322,88 +281,50 @@ void main_blinky( void )
 
     ++bootCount;
 
-    /* Create the event log mutex before any event_log_write() call so the
-     * boot event from msp_self_test_run() is not silently dropped. */
+    /* Initialise event log mutex so event_log_write() works from startup */
     event_log_init();
-
-    /* Power-On Self Test: probes I2C bus, sensors, WDT pin states.
-     * Uses g_last_sysrstiv (captured in main.c) because reading SYSRSTIV
-     * in main.c already cleared it before this function is reached. */
-    msp_self_test_run(g_last_sysrstiv, bootCount);
 
     csp_sys_set_reboot(csp_reboot_function);
 
-    error = csp_can_socketcan_open_and_add_interface("/dev/can", CSP_IF_CAN_DEFAULT_NAME, 0, false, &default_interface);
-    if(error != CSP_ERR_NONE) {
-        /* complain! */
-        //csp_print("Error %d opening CAN interface", error);
-    }
-
-    csp_rtable_set(0, 0, default_interface, CSP_NO_VIA_ADDRESS);
-
-	/* Create the queue. */
+	/* Create the queue used between clock task and receive task */
     xQueue = xQueueCreate( mainQUEUE_LENGTH, sizeof( struct AppMessage ) );
-    xCanQueue = xQueueCreate( 8, sizeof( struct AppMessage ) );
 
 	if( xQueue != NULL )
 	{
-        /* Start the tasks. */
-	    csp_route_start_task(configMINIMAL_STACK_SIZE, mainQUEUE_RECEIVE_TASK_PRIORITY+1);
-
-		xTaskCreate( prvQueueReceiveTask,				/* The function that implements the task. */
-					"Rx", 								/* The text name assigned to the task - for debug only as it is not used by the kernel. */
-					configMINIMAL_STACK_SIZE, 			/* The size of the stack to allocate to the task. */
-					NULL, 								/* The parameter passed to the task - not used in this case. */
-					mainQUEUE_RECEIVE_TASK_PRIORITY, 	/* The priority assigned to the task. */
-					NULL );								/* The task handle is not required, so NULL is passed. */
+		xTaskCreate( prvQueueReceiveTask,
+					"Rx",
+					configMINIMAL_STACK_SIZE,
+					NULL,
+					mainQUEUE_RECEIVE_TASK_PRIORITY,
+					NULL );
 
 		xTaskCreate( prvClockTask, "CLK", configMINIMAL_STACK_SIZE, NULL, mainQUEUE_RECEIVE_TASK_PRIORITY+1, NULL );
 
-        xTaskCreate( prvCanTask, "CN", configMINIMAL_STACK_SIZE, NULL, mainQUEUE_RECEIVE_TASK_PRIORITY+2, NULL ); // highest priority
-
-        /* RP2350 liveness monitor (GPIO heartbeat + I2C heartbeat + escalation) */
-        rp_liveness_task_create();
-
-        /* Supervisor mode state machine (0.5 Hz) */
+        /* Mode state machine: drives rail enables based on mode (brownout etc) */
         mode_state_machine_task_create();
 
-        /* Battery voltage/current (1 Hz) + temperature/heater (5 s) */
+        /* INA219 @ 0x41: battery/rail voltage + current (1 Hz) */
         battery_monitor_task_create();
 
-        /* Ground contact processor + 48-hour deadman */
-        ground_contact_task_create();
+        /* Rail GPIO policy: enforces EN/SHDN pins based on current mode */
+        power_policy_enforcer_task_create();
 
-        /* MSP status bytes → RP (1 Hz) */
-        msp_status_publish_task_create();
-
-        /* RP fault counter reader (1 Hz) */
-        fault_counter_update_task_create();
-
-        /* Non-RF command dispatch + response collector (10 Hz) */
-        rp_cmd_dispatch_task_create();
-
-        /* FRAM event log flush (60 s) — also creates log mutex */
-        event_log_flush_task_create();
-
-        /* I2C device census (60 s) */
+        /* I2C device census (60 s) — detects INA219 presence */
         i2c_census_task_create();
 
-        /* MSP-local power rail GPIO policy (1 Hz) */
-        power_policy_enforcer_task_create();
+        /* FRAM event log flush (60 s) */
+        event_log_flush_task_create();
+
+        /* MSP status bytes → RP regmap via I2C (1 Hz) */
+        msp_status_publish_task_create();
 
         /* Regulator PG monitor + recovery cycling (1 Hz) */
         reg_cycle_task_create();
 
-        /* eFuse FLT monitor + recovery cycling / eps_current_limit_3v3 (1 Hz) */
+        /* eFuse FLT monitor + recovery cycling (1 Hz) */
         efuse_cycle_task_create();
 
-        /* Hourly CRC32 memory scrub over code FRAM region */
-        msp_memory_scrub_task_create();
-
-        /* RP boot image confirmation / golden fallback manager (1 Hz) */
-        boot_image_manager_task_create();
-
-        /* EPS 3.3 V rail overcurrent monitor — INA219 @ 0x44 (2 Hz) */
+        /* MSP 3.3V supply OC monitor — INA219 @ 0x41 (2 Hz, observe-only) */
         eps_3v3_monitor_task_create();
 
 		/* Start the tasks and timer running. */
@@ -433,30 +354,16 @@ struct AppMessage msg;
 
 	for( ;; )
 	{
-		/* Place this task in the blocked state until it is time to run again.
-		 * Runs at 1 Hz; WDT_A timeout is ~1.05 s so kicking here gives ~1x margin.
-		 * For the required 2 Hz service rate the kick is also done at the
-		 * half-second point — see the second vTaskDelayUntil call below. */
-		vTaskDelayUntil( &xNextWakeTime, pdMS_TO_TICKS( 500 ) );
-
-		/* --- Half-second WDT kick --- */
-		WDT_A_resetTimer( __MSP430_BASEADDRESS_WDT_A__ );
-
-		vTaskDelayUntil( &xNextWakeTime, pdMS_TO_TICKS( 500 ) );
-
-		/* --- Full second: kick again then do 1 Hz work --- */
-		WDT_A_resetTimer( __MSP430_BASEADDRESS_WDT_A__ );
+		/* 1 Hz tick */
+		vTaskDelayUntil( &xNextWakeTime, pdMS_TO_TICKS( 1000 ) );
 
 		++current_second;
 
-		/* Advance FRAM-persistent Unix time counter (1 Hz tick) */
+		/* Advance FRAM-persistent Unix time counter */
 		timekeeper_tick_1hz();
 
-		/* Advance fault counter decay timer (1 Hz tick) */
+		/* Fault counter hourly decay */
 		fault_tick_1hz();
-
-		/* Advance 48-hour deadman timer (1 Hz tick) */
-		ground_contact_tick_1hz();
 
 		/* Send to the queue - causing the queue receive task to unblock and
 		toggle the LED.  0 is used as the block time so the sending operation
@@ -509,24 +416,6 @@ static void prvQueueReceiveTask( void *pvParameters )
         is it the expected value?  If it is, toggle the LED. */
         if( msg.msgID == eTimer )
         {
-            if((tlm_period > 0) && (++tlm_counter >= tlm_period))
-            {
-                tlm_counter = 0;
-                ADCtime = current_second;
-#if 0   /* Init_ADC() is commented out — do not start conversion on uninitialised ADC */
-                ADC12_B_startConversion(ADC12_B_BASE, ADC12_B_START_AT_ADC12MEM0, ADC12_B_SEQOFCHANNELS);
-#endif
-            }
-
-            if(tlm_duration > 0)
-            {
-                /* countdown timer to revert to default tlm period */
-                if(--tlm_duration == 0)
-                {
-                    /* timer expired */
-                    tlm_period = DEFAULT_TLM_PERIOD;
-                }
-            }
             vParTestToggleLED( mainTASK_LED );
             vParTestToggleLED( mainTASK_LED_2 );
 
@@ -568,120 +457,27 @@ static void prvQueueReceiveTask( void *pvParameters )
             }
         }
 
-        if( msg.msgID == eADC )
-        {
-            packet = csp_buffer_get(0);
-
-            if(packet != NULL ) {
-                /* copy ADCtime, followed by ADCdata */
-                packet->data[0] = eAPP_TLM;
-                packet->data[1] = 0; //OK
-                packet->data[2] = MISSION_ID_0;
-                packet->data[3] = MISSION_ID_1;
-                packet->data[4] = 0;
-                packet->data[5] = CSP_ID;
-                memcpy(&(packet->data[6]), &ADCtime, 4);
-                memcpy(&(packet->data[10]),ADCdata, 22);
-                packet->length = 32;
-
-                if((conn = csp_connect(CSP_PRIO_NORM, PC_CSP_ID, PC_BUFF_PORT, 0, CSP_SO_NONE)) != NULL) {
-                    // send to PC, 3000ms timeout
-                    if( csp_send(conn, packet, 3000) != CSP_ERR_NONE) {
-                        csp_buffer_free(packet);
-                    }
-                    can_start_tx();
-                    csp_close(conn);
-                }
-            }
-        }
-
-        /* Test for a new connection, 0 mS timeout */
+        /* CSP packet handling — no CAN in this build, socket is kept for
+         * future RP→MSP commands arriving via I2C-bridged CSP if needed */
         if ((conn = csp_accept(sock, 0)) != NULL) {
-            /* handle connection */
             packet = csp_read(conn, 0);
             if (packet != NULL) {
-
-                /* handle the CSP packet */
                 ++rx_csp;
-
                 switch(packet->id.dport){
-                case CSP_TLM:
-                    // CSP tlm request
-                    handle_csp_tlm_request(conn,packet);
-                    break;
-
                 case CSP_TSYNC:
-                    handle_csp_timesync(conn,packet);
+                    handle_csp_timesync(conn, packet);
                     break;
-
-                case CSP_MSP_UPDATE:
-                    handle_csp_msp_update(conn, packet);
-                    break;
-
                 default:
                     csp_service_handler(conn, packet);
                     break;
                 }
-                can_start_tx();
             }
             csp_close(conn);
         }
     }
 }
 
-static void prvCanTask( void *pvParameters )
-{
-    struct AppMessage msg;
-
-    /* Remove compiler warning about unused parameter. */
-    ( void ) pvParameters;
-
-    for( ;; )
-    {
-        /* Wait until something arrives in the queue - this task will block
-        indefinitely provided INCLUDE_vTaskSuspend is set to 1 in
-        FreeRTOSConfig.h. */
-        xQueueReceive( xCanQueue, &msg, portMAX_DELAY /* pdMS_TO_TICKS( 100 )*/ );
-
-        if (mcp2515_irq & MCP2515_IRQ_FLAGGED) {
-            int i;
-            //irq = can_irq_handler();
-            while( (irq = can_irq_handler()) != 0) {
-                if (irq & MCP2515_IRQ_RX && !(irq & MCP2515_IRQ_ERROR)) {
-                    i = can_recv(&rid, &mext, buf);
-                    if (i >= 0) {
-                        if (mext) {
-
-                            ridbuf[nirq++] = rid;
-                            if(nirq>=4) {
-                            nirq=0;
-                            }
-
-                            /* TODO: replace the following with CSP CAN packet handling when we have room */
-                            /* Call RX callback */
-                            //csp_can_rx(&ctx->iface, frame.can_id, frame.data, frame.can_dlc, NULL);
-                            csp_can_rx(default_interface, rid, buf, i, NULL);
-                        }
-                    }
-                } else if (irq & MCP2515_IRQ_TX && !(irq & MCP2515_IRQ_ERROR) ) {
-                    /* successful transmit complete */
-                    can_tx_next_packet(NULL);
-                } else if (irq & MCP2515_IRQ_ERROR) {
-                    can_r_reg(MCP2515_CANINTF, &mext, 1);
-                    can_r_reg(MCP2515_EFLG, &eflag, 1);
-                    // TODO  -assert? - reset? - handle error?
-                }
-            }
-        }
-        can_tx_next_packet(NULL);
-    }
-}
-
-void can_start_tx(void)
-{
-    // TODO - replace with FreeRTOS task notification (plus task_woken)?
-    xQueueSend( xCanQueue, &CANflag, 0U );
-}
+/* CAN task and can_start_tx removed — CAN not used in this build. */
 
 
 /**********************************************************************//**
@@ -691,137 +487,13 @@ void can_start_tx(void)
  *
  * @return none
  *************************************************************************/
-#pragma vector=ADC12_VECTOR
-__interrupt void ADC12_ISR(void)
-{
-    uint8_t channel = 0;
-
-  switch(__even_in_range(ADC12IV,12))
-  {
-    case ADC12IV_NONE: break;               // No interrupt
-    case ADC12IV_ADC12OVIFG: break;         // conversion result overflow
-    case ADC12IV_ADC12TOVIFG: break;        // conversion time overflow
-    case ADC12IV_ADC12HIIFG: break;         // ADC12HI
-    case ADC12IV_ADC12LOIFG: break;         // ADC12LO
-    case ADC12IV_ADC12INIFG: break;         // ADC12IN
-    //case ADC12IV_ADC12IFG0:
-    case ADC12IV_ADC12IFG10:
-        for(channel = 0; channel < 11; channel++)
-        {
-            /* 2*channel as reading 16-bit value with 8-bit offset */
-            ADCdata[channel] = ADC12_B_getResults(ADC12_B_BASE, 2*channel);
-        }
-        ADCResult.msgID = eADC;
-        /* now post result to xQueue */
-        xQueueSendFromISR( xQueue, &ADCResult, 0U );
-        __bic_SR_register_on_exit(CPUOFF);  //required?
-        break;
-    default: break;
-  }
-}
+/* ADC12 ISR removed — ADC not initialised in this build */
 
 
-// ISR for PORT2
-#pragma vector=PORT2_VECTOR
-__interrupt void P2_ISR(void)
-{
-    //BaseType_t task_woken = 0;
-
-    if (P2IFG & CAN_IRQ_PORTBIT) {
-        P2IFG &= ~CAN_IRQ_PORTBIT;
-        mcp2515_irq |= MCP2515_IRQ_FLAGGED;
-
-        xQueueSendFromISR( xCanQueue, &CANflag, 0U );
-
-        //__bic_SR_register_on_exit(LPM3_bits);
-        __bic_SR_register_on_exit(CPUOFF);
-    }
-}
+/* PORT2 ISR — CAN IRQ removed; P2 interrupts not used in this build */
 
 
-void handle_csp_tlm_request(csp_conn_t * conn, csp_packet_t * packet) {
-    eTlmType packet_type = (eTlmType)packet->data[0];
-    uint32_t tick = current_second;
-    uint32_t scratch;
-
-    switch(packet_type) {
-    case eSOH_TLM:
-        uptime = csp_get_uptime_s();
-        tx_csp = (uint16_t)default_interface->tx;
-        packet->data[0] = (uint8_t)packet_type;
-        packet->data[1] = 0; //OK
-        packet->data[2] = MISSION_ID_0;
-        packet->data[3] = MISSION_ID_1;
-        packet->data[4] = 0;
-        packet->data[5] = CSP_ID;
-        memcpy(&(packet->data[6]), &tick, sizeof(tick));
-        memcpy(&(packet->data[10]),&bootCount, sizeof(bootCount));
-        memcpy(&(packet->data[12]),&bootCause, sizeof(bootCause));
-        memcpy(&(packet->data[14]),&uptime, sizeof(uptime));
-        memcpy(&(packet->data[18]),&wd_timeout, sizeof(wd_timeout));
-        memcpy(&(packet->data[22]),&wd_count, sizeof(wd_count));
-        memcpy(&(packet->data[24]),&rx_csp, sizeof(rx_csp));
-        memcpy(&(packet->data[26]),&tx_csp, sizeof(tx_csp));
-        packet->length = 28;
-        if (!csp_send(conn, packet, 0))
-            csp_buffer_free(packet);
-        break;
-
-    case eAPP_TLM:
-        // send application telemetry
-        //memset();
-        //bzero(tlm_pkt,MAX_TLM_PACKET_SIZE);
-        packet->data[0] = (uint8_t)packet_type;
-        packet->data[1] = 0; //OK
-        packet->data[2] = MISSION_ID_0;
-        packet->data[3] = MISSION_ID_1;
-        packet->data[4] = 0;
-        packet->data[5] = CSP_ID;
-        memcpy(&(packet->data[6]), &ADCtime, 4);
-        memcpy(&(packet->data[10]),ADCdata, 22);
-        packet->length = 32;
-        if (!csp_send(conn, packet, 0))
-            csp_buffer_free(packet);
-        break;
-
-    case eVER_TLM:
-        // send application version telemetry
-        packet->data[0] = (uint8_t)packet_type;
-        packet->data[1] = 0; //OK
-        packet->data[2] = MISSION_ID_0;
-        packet->data[3] = MISSION_ID_1;
-        packet->data[4] = 0;
-        packet->data[5] = CSP_ID;
-        packet->data[6] = VER_MAJOR;
-        packet->data[7] = VER_MINOR;
-        packet->data[8] = VER_PATCH;
-        packet->length = 9;
-        if (!csp_send(conn, packet, 0))
-            csp_buffer_free(packet);
-        break;
-
-    case eSET_RATE_TLM:
-        // set application telemetry rate
-        packet->data[0] = (uint8_t)packet_type;
-        packet->length = 2;
-
-        memcpy(&scratch,&(packet->data[1]),4);
-        tlm_period = scratch;
-        memcpy(&scratch,&(packet->data[5]),4);
-        tlm_duration = scratch;
-        packet->data[1] = 0; /* status = OK */
-
-        if (!csp_send(conn, packet, 0))
-             csp_buffer_free(packet);
-        break;
-
-    default:
-        // unhandled tlm type - free packet.
-        csp_buffer_free(packet);
-        break;
-    }
-
-}
+/* handle_csp_tlm_request removed — CAN/CSP telemetry not used in this build */
 
 void handle_csp_timesync(csp_conn_t * conn, csp_packet_t * packet)
 {

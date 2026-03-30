@@ -11,10 +11,12 @@
 #include "fault_counters.h"
 #include "mode_state_machine.h"
 #include "battery_monitor.h"
-#include "ground_contact.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <msp430.h>
+
+/* ground_contact not active in this build — contact age always 0 */
+static const uint32_t g_contact_age_s = 0u;
 
 /* ------------------------------------------------------------------
  * Task
