@@ -46,10 +46,11 @@ __persistent keyword to be used.  See http://www.freertos.org/a00111.html#heap_4
 #define configMAX_PRIORITIES					( 5 )
 #define configCPU_CLOCK_HZ						( 8000000 )
 #define configTICK_RATE_HZ						( 100 ) /* In this non-real time simulated environment the tick frequency has to be at least a multiple of the Win32 tick frequency, and therefore very slow. */
-/* 10 KB was insufficient once all supervisor tasks were added (~9.7 KB needed
- * before CSP internal allocations). Restored to 14 KB. The heap is #pragma
- * PERSISTENT (FRAM), and MSP430FR5969 has 64 KB FRAM so this is safe. */
-#define configTOTAL_HEAP_SIZE                   ( 14 * 1024 )
+/* 12 KB: 10 KB was too small (scheduler couldn't allocate idle task — tasks
+ * never ran). 14 KB caused FRAM overflow (code + PERSISTENT heap > ~47 KB).
+ * 12 KB is the balance: all 21 tasks + CSP fit with ~800 B margin.
+ * configMINIMAL_STACK_SIZE reduced to 120 words (was 140) to achieve this. */
+#define configTOTAL_HEAP_SIZE                   ( 12 * 1024 )
 #define configMAX_TASK_NAME_LEN					( 15 )
 #define configUSE_TRACE_FACILITY				1
 #define configUSE_16_BIT_TICKS					0 //VGL
@@ -165,7 +166,11 @@ CLI. */
 	#ifdef __LARGE_DATA_MODEL__
 		#define configMINIMAL_STACK_SIZE		( ( unsigned short ) 85 )
 	#else
-		#define configMINIMAL_STACK_SIZE		( ( unsigned short ) 140 )
+		/* Reduced from 140 to 120 words to reclaim ~840 B of heap across
+		 * 21 tasks, making 12 KB heap viable. 120 words = 240 bytes;
+		 * enough for the MSP430X register save frame (~20 words) plus
+		 * typical supervisor task call depth. */
+		#define configMINIMAL_STACK_SIZE		( ( unsigned short ) 120 )
 	#endif
 #endif /* IAR_MSP */
 
