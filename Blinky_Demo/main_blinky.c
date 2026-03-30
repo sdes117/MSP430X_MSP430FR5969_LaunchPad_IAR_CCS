@@ -93,11 +93,11 @@ volatile uint8_t       g_ina_ok   = 0u;  /* 1 = last read succeeded */
  * If the INA219 has no power on reconnect, init NACKs → snapshot unchanged.
  * Read g_ina_snapshot (not g_ina_data) in the debugger after a standalone run.
  * ------------------------------------------------------------------ */
-#pragma NOINIT(g_ina_snapshot)
-ina219_data_t g_ina_snapshot;       /* last confirmed good reading */
+#pragma PERSISTENT
+ina219_data_t g_ina_snapshot = { 0, 0, 0, 0 };  /* last confirmed good reading — in FRAM */
 
-#pragma NOINIT(g_ina_snapshot_ok)
-uint8_t g_ina_snapshot_ok;          /* 1 = g_ina_snapshot contains valid data */
+#pragma PERSISTENT
+uint8_t g_ina_snapshot_ok = 0u;     /* 1 = g_ina_snapshot contains valid data */
 
 /* ------------------------------------------------------------------
  * Internal state
