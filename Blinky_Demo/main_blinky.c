@@ -252,6 +252,11 @@ static void prvInaTask(void *pvParameters)
     ina219_data_t data;
     (void)pvParameters;
 
+    /* If a valid snapshot already exists, wait 15 s before touching the INA.
+     * This gives time to connect JTAG and halt before the snapshot is overwritten. */
+    if (g_ina_snapshot_ok)
+        vTaskDelay(pdMS_TO_TICKS(15000u));
+
     for (;;)
     {
         vTaskDelayUntil(&xNext, pdMS_TO_TICKS(500u));
