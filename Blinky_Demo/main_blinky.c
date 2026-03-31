@@ -93,11 +93,21 @@ volatile uint8_t       g_ina_ok   = 0u;  /* 1 = last read succeeded */
  * If the INA219 has no power on reconnect, init NACKs → snapshot unchanged.
  * Read g_ina_snapshot (not g_ina_data) in the debugger after a standalone run.
  * ------------------------------------------------------------------ */
-#pragma PERSISTENT
+#pragma PERSISTENT(g_ina_snapshot)
 ina219_data_t g_ina_snapshot = { 0, 0, 0, 0 };  /* last confirmed good reading — in FRAM */
 
-#pragma PERSISTENT
+#pragma PERSISTENT(g_ina_snapshot_ok)
 uint8_t g_ina_snapshot_ok = 0u;     /* 1 = g_ina_snapshot contains valid data */
+
+/* Diagnostic: last error codes from INA task — inspect after standalone run */
+#pragma PERSISTENT(g_ina_diag_init_rc)
+int8_t g_ina_diag_init_rc = 0;      /* last return code from ina219_init() */
+
+#pragma PERSISTENT(g_ina_diag_read_rc)
+int8_t g_ina_diag_read_rc = 0;      /* last return code from ina219_read() */
+
+#pragma PERSISTENT(g_ina_diag_attempts)
+uint16_t g_ina_diag_attempts = 0u;  /* total number of init attempts */
 
 /* ------------------------------------------------------------------
  * Internal state
@@ -249,23 +259,30 @@ static void prvInaTask(void *pvParameters)
         /* Write config + calibration on first successful contact */
         if (!inited)
         {
-            if (ina219_init(&g_ina_3v3_msp) != INA219_OK)
+            int8_t irc = ina219_init(&g_ina_3v3_msp);
+            g_ina_diag_init_rc = irc;
+            ++g_ina_diag_attempts;
+            if (irc != INA219_OK)
                 continue;   /* sensor not ready yet — try again next cycle */
             inited = 1u;
         }
 
         /* Read all four data registers */
-        if (ina219_read(&g_ina_3v3_msp, &data) == INA219_OK)
         {
-            g_ina_data        = data;
-            g_ina_ok          = 1u;
-            g_ina_snapshot    = data;   /* persist to FRAM — only on confirmed read */
-            g_ina_snapshot_ok = 1u;
-        }
-        else
-        {
-            g_ina_ok = 0u;
-            inited   = 0u;   /* re-init next time */
+            int8_t rrc = ina219_read(&g_ina_3v3_msp, &data);
+            g_ina_diag_read_rc = rrc;
+            if (rrc == INA219_OK)
+            {
+                g_ina_data        = data;
+                g_ina_ok          = 1u;
+                g_ina_snapshot    = data;   /* persist to FRAM — only on confirmed read */
+                g_ina_snapshot_ok = 1u;
+            }
+            else
+            {
+                g_ina_ok = 0u;
+                inited   = 0u;   /* re-init next time */
+            }
         }
     }
 }
