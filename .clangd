@@ -1,7 +1,7 @@
 # This is an auto-generated file - do not add it to source-control
 
 CompileFlags:
-   CompilationDatabase: Large_Data/.clangd
+   CompilationDatabase: Small_Data/.clangd
 
 Diagnostics:
    Suppress: '*'
