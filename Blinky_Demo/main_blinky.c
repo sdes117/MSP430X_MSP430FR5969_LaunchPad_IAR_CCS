@@ -198,6 +198,17 @@ static void prvClockTask(void *pvParameters)
         /* Also mirror to telemetry region */
         (void)i2c_write_reg(RP_I2C_ADDR, REG_TLM_MSP_STATUS0, &s0, 1u);
 
+        /* Write INA219 telemetry (3V3_MSP rail) — only when sensor data is valid.
+         * Local copies avoid g_ina_data changing mid-write (INA task runs concurrently).
+         * MSP430 is little-endian so casting to uint8_t* gives correct LE wire format. */
+        if (g_ina_ok)
+        {
+            uint16_t v_mv = g_ina_data.bus_mv;
+            int16_t  i_ma = g_ina_data.current_ma;
+            (void)i2c_write_reg(RP_I2C_ADDR, REG_TLM_VBATT_MV, (const uint8_t *)&v_mv, 2u);
+            (void)i2c_write_reg(RP_I2C_ADDR, REG_TLM_IBATT_MA, (const uint8_t *)&i_ma, 2u);
+        }
+
         /* Send tick to Rx task */
         xQueueSend(xTickQueue, &tick, 0u);
     }

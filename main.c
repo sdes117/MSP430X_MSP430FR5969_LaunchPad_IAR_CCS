@@ -248,7 +248,7 @@ static void prvSetupHardware( void )
     Init_GPIO();
 
     /* Release RP2350 reset only after core peripherals are initialized. */
-    // GPIO_setOutputHighOnPin(GPIO_PORT_P2, GPIO_PIN6);
+    GPIO_setOutputHighOnPin(GPIO_PORT_P2, GPIO_PIN6);
     g_boot_stage = 0x0016;
 
     Init_Clock();
