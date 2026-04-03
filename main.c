@@ -301,8 +301,9 @@ static void Init_GPIO(void)
 
 
     GPIO_setOutputLowOnPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2); // EN_3V3, eFuseA_SHDN
-    GPIO_setOutputHighOnPin(GPIO_PORT_P3, GPIO_PIN4); // WDT2
-    GPIO_setAsOutputPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2 | GPIO_PIN4);
+    GPIO_setOutputHighOnPin(GPIO_PORT_P3, GPIO_PIN4); // WDT2 (internal)
+    GPIO_setOutputLowOnPin(GPIO_PORT_P3, GPIO_PIN5);  // WDT_MSP2RP — idle LOW, pulse HIGH to signal RP
+    GPIO_setAsOutputPin(GPIO_PORT_P3, GPIO_PIN0 | GPIO_PIN2 | GPIO_PIN4 | GPIO_PIN5);
 
     GPIO_setOutputLowOnPin(GPIO_PORT_P4, GPIO_PIN4); // RegB_~EN
     GPIO_setAsOutputPin(GPIO_PORT_P4, GPIO_PIN4);

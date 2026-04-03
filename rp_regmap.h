@@ -15,8 +15,27 @@
 /* RP2350 I2C slave address */
 #define RP_I2C_ADDR             (0x42u)
 
+/* Ownership convention:
+ *   MSP_OWNED : MSP writes via i2c_write_reg, RP stores locally
+ *   RP_OWNED  : RP writes locally, MSP reads via i2c_read_reg on request
+ */
+
 /* ------------------------------------------------------------------
- * MSP -> RP status registers (MSP writes, RP reads)
+ * RP_OWNED  0x40–0x5F : RP status and health (MSP reads these)
+ * ------------------------------------------------------------------ */
+#define REG_RP_STATUS0          (0x40u)   /* mode[2:0] | tasks_ok | wdt_ok */
+#define REG_RP_STATUS1          (0x41u)   /* RP fault flags                */
+#define REG_RP_UPTIME_LO        (0x44u)   /* uint16 LE uptime seconds [15:0]  */
+#define REG_RP_UPTIME_HI        (0x46u)   /* uint16 LE uptime seconds [31:16] */
+#define REG_RP_WDT_CTR          (0x48u)   /* uint8 WDT kick counter            */
+#define REG_RP_CONTACT_FLAG     (0x50u)   /* uint8 bit0 = contact pending      */
+
+/* RP_STATUS0 bit fields */
+#define RP_STATUS0_TASKS_OK     (1u << 3)
+#define RP_STATUS0_WDT_OK       (1u << 4)
+
+/* ------------------------------------------------------------------
+ * MSP_OWNED : MSP -> RP status registers (MSP writes, RP reads)
  * ------------------------------------------------------------------ */
 
 /* MSP operating mode + fault summary */

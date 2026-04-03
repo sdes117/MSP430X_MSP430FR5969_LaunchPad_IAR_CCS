@@ -190,24 +190,29 @@ static void prvClockTask(void *pvParameters)
 
         uint8_t s1 = (uint8_t)(g_ina_ok ? 0u : STATUS1_OC_MCU);  /* reuse bit: sensor absent = possible OC */
 
-        /* Attempt to write STATUS bytes to RP regmap.
-         * i2c_write_reg returns I2C_ERR_NACK if RP is not connected — ignore. */
-        (void)i2c_write_reg(RP_I2C_ADDR, REG_MSP_STATUS0, &s0, 1u);
-        (void)i2c_write_reg(RP_I2C_ADDR, REG_MSP_STATUS1, &s1, 1u);
+        /* Write RP regmap registers one at a time with a short inter-transaction
+         * gap. The RP runs CircuitPython and needs ~5 ms to process each I2C
+         * write before it can ACK the next one. In production (bare-metal RP)
+         * these delays can be removed. NACKs from an absent RP are ignored. */
+        #define RP_WRITE(reg, ptr, len) \
+            (void)i2c_write_reg(RP_I2C_ADDR, (reg), (ptr), (len)); \
+            vTaskDelay(pdMS_TO_TICKS(10u))
 
-        /* Also mirror to telemetry region */
-        (void)i2c_write_reg(RP_I2C_ADDR, REG_TLM_MSP_STATUS0, &s0, 1u);
+        RP_WRITE(REG_MSP_STATUS0,    &s0, 1u);
+        RP_WRITE(REG_MSP_STATUS1,    &s1, 1u);
+        RP_WRITE(REG_TLM_MSP_STATUS0, &s0, 1u);
 
-        /* Write INA219 telemetry (3V3_MSP rail) — only when sensor data is valid.
-         * Local copies avoid g_ina_data changing mid-write (INA task runs concurrently).
-         * MSP430 is little-endian so casting to uint8_t* gives correct LE wire format. */
         if (g_ina_ok)
         {
+            /* Local copies prevent g_ina_data changing mid-write (INA task runs concurrently).
+             * MSP430 is little-endian so casting to uint8_t* gives correct LE wire format. */
             uint16_t v_mv = g_ina_data.bus_mv;
             int16_t  i_ma = g_ina_data.current_ma;
-            (void)i2c_write_reg(RP_I2C_ADDR, REG_TLM_VBATT_MV, (const uint8_t *)&v_mv, 2u);
-            (void)i2c_write_reg(RP_I2C_ADDR, REG_TLM_IBATT_MA, (const uint8_t *)&i_ma, 2u);
+            RP_WRITE(REG_TLM_VBATT_MV, (const uint8_t *)&v_mv, 2u);
+            RP_WRITE(REG_TLM_IBATT_MA, (const uint8_t *)&i_ma, 2u);
         }
+
+        #undef RP_WRITE
 
         /* Send tick to Rx task */
         xQueueSend(xTickQueue, &tick, 0u);
