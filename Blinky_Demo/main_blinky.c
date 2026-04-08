@@ -241,9 +241,9 @@ static void prvClockTask(void *pvParameters)
         else
         {
             uint8_t rp_ifg = P3IFG & (BIT1 | BIT7);
-            if (rp_ifg)
+            if ((rp_ifg & BIT1) && (rp_ifg & BIT7))
             {
-                /* Rising edge seen on at least one heartbeat line */
+                /* Rising edge seen on BOTH heartbeat lines — RP healthy */
                 P3IFG      &= (uint8_t)~(BIT1 | BIT7);
                 rp_wdt_timer = 0u;
             }
@@ -254,8 +254,9 @@ static void prvClockTask(void *pvParameters)
                     rp_wdt_timer = 0u;
                     ++g_rp_reset_count;
                     GPIO_setOutputLowOnPin(RESET_RP_PORT, RESET_RP_PIN);
-                    vTaskDelay(pdMS_TO_TICKS(100u));
+                    vTaskDelay(pdMS_TO_TICKS(5u));   /* 5 ms — RUN pin spec is >1 ms */
                     GPIO_setOutputHighOnPin(RESET_RP_PORT, RESET_RP_PIN);
+                    supervisor_i2c_recover();        /* clear any stuck-bus state from interrupted transaction */
                     rp_wdt_grace = RP_WDT_GRACE_S;  /* wait for RP reboot */
                 }
             }

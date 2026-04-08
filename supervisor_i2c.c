@@ -53,6 +53,25 @@ void supervisor_i2c_init(void)
     configASSERT(xI2CMutex != NULL);
 }
 
+void supervisor_i2c_recover(void)
+{
+    /* Disable UCB0, reset all state, re-enable.
+     * Call after an RP reset to clear any stuck-bus state left by an
+     * interrupted I2C transaction. Does NOT touch the mutex. */
+    EUSCI_B_I2C_disable(EUSCI_B0_BASE);
+
+    EUSCI_B_I2C_initMasterParam p = {
+        .selectClockSource    = EUSCI_B_I2C_CLOCKSOURCE_SMCLK,
+        .i2cClk               = 8000000UL,
+        .dataRate             = EUSCI_B_I2C_SET_DATA_RATE_400KBPS,
+        .byteCounterThreshold = 0u,
+        .autoSTOPGeneration   = EUSCI_B_I2C_NO_AUTO_STOP,
+    };
+    EUSCI_B_I2C_initMaster(EUSCI_B0_BASE, &p);
+    EUSCI_B_I2C_setTimeout(EUSCI_B0_BASE, EUSCI_B_I2C_TIMEOUT_31_MS);
+    EUSCI_B_I2C_enable(EUSCI_B0_BASE);
+}
+
 int8_t i2c_write_reg(uint8_t addr, uint8_t reg, const uint8_t *data, uint8_t len)
 {
     int8_t  rc = I2C_OK;
