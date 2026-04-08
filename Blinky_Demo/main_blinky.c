@@ -43,33 +43,23 @@
 #define PRIORITY_CLK    ( tskIDLE_PRIORITY + 3u )
 #define PRIORITY_RX     ( tskIDLE_PRIORITY + 2u )
 #define PRIORITY_INA    ( tskIDLE_PRIORITY + 1u )
-#define PRIORITY_WDT    ( tskIDLE_PRIORITY + 2u )  /* same as Rx — monitor is time-sensitive */
 
 /* ------------------------------------------------------------------
- * WDT pulse config
+ * WDT pulse config (MSP external WDT chip heartbeats)
  * ------------------------------------------------------------------ */
 /* At 8 MHz, 8 cycles ≈ 1 µs  >  500 ns minimum pulse width */
 #define WDT_LOW_CYCLES          ( 8U )
 #define WDT_PULSE_PERIOD_S      ( 2U )   /* pulse WDT lines every N seconds */
 
 /* ------------------------------------------------------------------
- * RP WDT monitor config
- * RP pulses both heartbeat lines LOW every 2 s (1 ms pulse width).
- * A 5 s timeout = 2.5× the nominal period — generous but not too slow.
- * ~RESET_RP (P2.6) is pulled LOW for ~100 ms then released HIGH.
+ * RP watchdog monitor
+ * RP idles LOW on P3.7 (GP5) and P3.1 (GP8), pulses HIGH every 2 s.
+ * Rising edges latch in P3IFG — polled here, no ISR needed.
  * ------------------------------------------------------------------ */
-#define RP_WDT_TIMEOUT_MS       ( 5000U )
-#define RP_RESET_ASSERT_MS      ( 100U )
-
-/* RP heartbeat GPIO */
-#define WDT_RP2MSP1_PORT        GPIO_PORT_P3
-#define WDT_RP2MSP1_PIN         GPIO_PIN7   /* input: RP GP1 → MSP P3.7 */
-#define WDT_RP2MSP2_PORT        GPIO_PORT_P3
-#define WDT_RP2MSP2_PIN         GPIO_PIN1   /* input: RP GP6 → MSP P3.1 */
-
-/* RP reset GPIO */
+#define RP_WDT_TIMEOUT_S        ( 6U )   /* seconds without heartbeat → reset RP */
+#define RP_WDT_GRACE_S          ( 10U )  /* grace period after boot/RP reset */
 #define RESET_RP_PORT           GPIO_PORT_P2
-#define RESET_RP_PIN            GPIO_PIN6   /* active-low; drive LOW to reset RP */
+#define RESET_RP_PIN            GPIO_PIN6
 
 /* INA219 instance — 3V3_MSP supply line, address 0x41 */
 static const ina219_t g_ina_3v3_msp = {
@@ -138,6 +128,9 @@ uint16_t g_boot_count;
 #pragma NOINIT(g_current_second)
 uint32_t g_current_second;
 
+#pragma PERSISTENT(g_rp_reset_count)
+uint16_t g_rp_reset_count = 0u;   /* total RP resets issued — inspect after standalone run */
+
 static QueueHandle_t xTickQueue = NULL;
 
 extern volatile uint16_t g_last_sysrstiv;   /* captured in main.c */
@@ -152,11 +145,6 @@ static void prvInaTask    (void *pvParameters);
 static inline void prvApplyRailEnables(void);
 static inline void prvPulseWdt1(void);
 static inline void prvPulseWdt2(void);
-static void        prvWdtMonitorTask(void *pvParameters);
-
-/* Diagnostic: count of RP resets triggered by this monitor */
-#pragma PERSISTENT(g_rp_wdt_reset_count)
-uint16_t g_rp_wdt_reset_count = 0u;
 
 /* ------------------------------------------------------------------
  * Entry point called from main()
@@ -175,23 +163,12 @@ void main_blinky(void)
     /* Apply default rail state (all enabled) before scheduler starts */
     prvApplyRailEnables();
 
-    /* Configure falling-edge detection on RP heartbeat lines.
-     * P3IE is NOT enabled — no ISR. Hardware latches the edge in P3IFG
-     * even without an interrupt, so the 1 ms RP pulse is captured and
-     * held until the monitor task polls and clears the flag (every 500 ms). */
-    GPIO_selectInterruptEdge(WDT_RP2MSP1_PORT, WDT_RP2MSP1_PIN, GPIO_HIGH_TO_LOW_TRANSITION);
-    GPIO_selectInterruptEdge(WDT_RP2MSP2_PORT, WDT_RP2MSP2_PIN, GPIO_HIGH_TO_LOW_TRANSITION);
-    GPIO_clearInterrupt(WDT_RP2MSP1_PORT, WDT_RP2MSP1_PIN);
-    GPIO_clearInterrupt(WDT_RP2MSP2_PORT, WDT_RP2MSP2_PIN);
-    /* Note: GPIO_enableInterrupt() intentionally omitted — polled, not interrupt-driven */
-
     xTickQueue = xQueueCreate(8u, sizeof(uint8_t));
     configASSERT(xTickQueue != NULL);
 
-    xTaskCreate(prvClockTask,      "CLK", configMINIMAL_STACK_SIZE, NULL, PRIORITY_CLK, NULL);
-    xTaskCreate(prvRxTask,         "Rx",  configMINIMAL_STACK_SIZE, NULL, PRIORITY_RX,  NULL);
-    xTaskCreate(prvInaTask,        "INA", configMINIMAL_STACK_SIZE, NULL, PRIORITY_INA, NULL);
-    xTaskCreate(prvWdtMonitorTask, "WDT", configMINIMAL_STACK_SIZE * 2u, NULL, PRIORITY_WDT, NULL);
+    xTaskCreate(prvClockTask, "CLK", configMINIMAL_STACK_SIZE, NULL, PRIORITY_CLK, NULL);
+    xTaskCreate(prvRxTask,    "Rx",  configMINIMAL_STACK_SIZE, NULL, PRIORITY_RX,  NULL);
+    xTaskCreate(prvInaTask,   "INA", configMINIMAL_STACK_SIZE, NULL, PRIORITY_INA, NULL);
 
     vTaskStartScheduler();
 
@@ -206,8 +183,10 @@ void main_blinky(void)
  * ------------------------------------------------------------------ */
 static void prvClockTask(void *pvParameters)
 {
-    TickType_t xNext = xTaskGetTickCount();
-    uint8_t    tick  = 1u;
+    TickType_t xNext      = xTaskGetTickCount();
+    uint8_t    tick       = 1u;
+    uint8_t    rp_wdt_timer = 0u;
+    uint8_t    rp_wdt_grace = RP_WDT_GRACE_S;
     (void)pvParameters;
 
     for (;;)
@@ -249,6 +228,38 @@ static void prvClockTask(void *pvParameters)
         }
 
         #undef RP_WRITE
+
+        /* ---- RP watchdog monitor (polled P3IFG, no ISR) ----------------
+         * RP idles LOW on P3.7/P3.1 and pulses HIGH every 2 s.
+         * P3IFG latches the rising edge; we clear it after reading.
+         * If no pulse is seen within RP_WDT_TIMEOUT_S seconds, reset RP.
+         * ---------------------------------------------------------------- */
+        if (rp_wdt_grace > 0u)
+        {
+            --rp_wdt_grace;
+        }
+        else
+        {
+            uint8_t rp_ifg = P3IFG & (BIT1 | BIT7);
+            if (rp_ifg)
+            {
+                /* Rising edge seen on at least one heartbeat line */
+                P3IFG      &= (uint8_t)~(BIT1 | BIT7);
+                rp_wdt_timer = 0u;
+            }
+            else
+            {
+                if (++rp_wdt_timer >= RP_WDT_TIMEOUT_S)
+                {
+                    rp_wdt_timer = 0u;
+                    ++g_rp_reset_count;
+                    GPIO_setOutputLowOnPin(RESET_RP_PORT, RESET_RP_PIN);
+                    vTaskDelay(pdMS_TO_TICKS(100u));
+                    GPIO_setOutputHighOnPin(RESET_RP_PORT, RESET_RP_PIN);
+                    rp_wdt_grace = RP_WDT_GRACE_S;  /* wait for RP reboot */
+                }
+            }
+        }
 
         /* Send tick to Rx task */
         xQueueSend(xTickQueue, &tick, 0u);
@@ -390,73 +401,3 @@ static inline void prvPulseWdt2(void)
     taskEXIT_CRITICAL();
 }
 
-/* ------------------------------------------------------------------
- * WDT monitor task — polls RP heartbeat edge flags every 500 ms.
- *
- * Hardware edge-detect: MSP430 sets P3IFG bits on a falling edge even
- * without P3IE enabled.  The RP's 1 ms LOW pulse is latched in P3IFG
- * and held until we read and clear it here.  No ISR is needed and no
- * FreeRTOS API is called from interrupt context.
- *
- * If either line has not pulsed within RP_WDT_TIMEOUT_MS, the RP is
- * considered hung and is reset via ~RESET_RP (P2.6 pulled LOW briefly).
- * ------------------------------------------------------------------ */
-static void prvWdtMonitorTask(void *pvParameters)
-{
-    const TickType_t xTimeout  = pdMS_TO_TICKS(RP_WDT_TIMEOUT_MS);
-    TickType_t xLastEdge1;
-    TickType_t xLastEdge2;
-    TickType_t xNext;
-    (void)pvParameters;
-
-    /* Give the RP time to boot and start pulsing before we start checking. */
-    vTaskDelay(pdMS_TO_TICKS(RP_WDT_TIMEOUT_MS * 2u));
-
-    /* Discard any stale flags accumulated during the boot delay. */
-    GPIO_clearInterrupt(WDT_RP2MSP1_PORT, WDT_RP2MSP1_PIN);
-    GPIO_clearInterrupt(WDT_RP2MSP2_PORT, WDT_RP2MSP2_PIN);
-
-    xLastEdge1 = xTaskGetTickCount();
-    xLastEdge2 = xTaskGetTickCount();
-    xNext      = xTaskGetTickCount();
-
-    for (;;)
-    {
-        vTaskDelayUntil(&xNext, pdMS_TO_TICKS(500u));
-
-        /* Check latched edge flags — set by hardware on falling edge. */
-        if (GPIO_getInterruptStatus(WDT_RP2MSP1_PORT, WDT_RP2MSP1_PIN))
-        {
-            GPIO_clearInterrupt(WDT_RP2MSP1_PORT, WDT_RP2MSP1_PIN);
-            xLastEdge1 = xTaskGetTickCount();
-        }
-        if (GPIO_getInterruptStatus(WDT_RP2MSP2_PORT, WDT_RP2MSP2_PIN))
-        {
-            GPIO_clearInterrupt(WDT_RP2MSP2_PORT, WDT_RP2MSP2_PIN);
-            xLastEdge2 = xTaskGetTickCount();
-        }
-
-        TickType_t now  = xTaskGetTickCount();
-        TickType_t age1 = now - xLastEdge1;
-        TickType_t age2 = now - xLastEdge2;
-
-        if ((age1 >= xTimeout) || (age2 >= xTimeout))
-        {
-            ++g_rp_wdt_reset_count;
-
-            /* Assert ~RESET_RP: pull P2.6 LOW briefly then release. */
-            GPIO_setOutputLowOnPin(RESET_RP_PORT, RESET_RP_PIN);
-            vTaskDelay(pdMS_TO_TICKS(RP_RESET_ASSERT_MS));
-            GPIO_setOutputHighOnPin(RESET_RP_PORT, RESET_RP_PIN);
-
-            /* Wait for RP to reboot before re-arming. */
-            vTaskDelay(pdMS_TO_TICKS(RP_WDT_TIMEOUT_MS * 2u));
-
-            GPIO_clearInterrupt(WDT_RP2MSP1_PORT, WDT_RP2MSP1_PIN);
-            GPIO_clearInterrupt(WDT_RP2MSP2_PORT, WDT_RP2MSP2_PIN);
-            xLastEdge1 = xTaskGetTickCount();
-            xLastEdge2 = xTaskGetTickCount();
-            xNext      = xTaskGetTickCount();
-        }
-    }
-}
