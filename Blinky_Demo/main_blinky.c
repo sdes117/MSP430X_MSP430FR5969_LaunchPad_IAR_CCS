@@ -194,49 +194,28 @@ static void prvClockTask(void *pvParameters)
         vTaskDelayUntil(&xNext, pdMS_TO_TICKS(1000u));
         ++g_current_second;
 
-        /* --- Build STATUS0: WDT lines OK (both P2.2 and P3.4 high) --- */
-        uint8_t wdt_ok  = ((P2OUT & BIT2) && (P3OUT & BIT4)) ? 1u : 0u;
-        uint8_t rail_ok = (g_rega_en && g_efusea_en) ? 1u : 0u;
-
-        uint8_t s0 = (uint8_t)(
-              (0u & STATUS0_MODE_MASK)           /* STARTUP mode until SM added */
-            | (wdt_ok  ? STATUS0_WDT_OK  : 0u)
-            | (rail_ok ? STATUS0_RAIL_OK : 0u));
-
-        uint8_t s1 = (uint8_t)(g_ina_ok ? 0u : STATUS1_OC_MCU);  /* reuse bit: sensor absent = possible OC */
-
-        /* Write RP regmap registers one at a time with a short inter-transaction
-         * gap. The RP runs CircuitPython and needs ~5 ms to process each I2C
-         * write before it can ACK the next one. In production (bare-metal RP)
-         * these delays can be removed. NACKs from an absent RP are ignored. */
-        #define RP_WRITE(reg, ptr, len) \
-            (void)i2c_write_reg(RP_I2C_ADDR, (reg), (ptr), (len)); \
-            vTaskDelay(pdMS_TO_TICKS(10u))
-
-        RP_WRITE(REG_MSP_STATUS0,    &s0, 1u);
-        RP_WRITE(REG_MSP_STATUS1,    &s1, 1u);
-        RP_WRITE(REG_TLM_MSP_STATUS0, &s0, 1u);
-
-        if (g_ina_ok)
-        {
-            /* Local copies prevent g_ina_data changing mid-write (INA task runs concurrently).
-             * MSP430 is little-endian so casting to uint8_t* gives correct LE wire format. */
-            uint16_t v_mv = g_ina_data.bus_mv;
-            int16_t  i_ma = g_ina_data.current_ma;
-            RP_WRITE(REG_TLM_VBATT_MV, (const uint8_t *)&v_mv, 2u);
-            RP_WRITE(REG_TLM_IBATT_MA, (const uint8_t *)&i_ma, 2u);
-        }
-
-        #undef RP_WRITE
-
         /* ---- RP watchdog monitor (polled P3IFG, no ISR) ----------------
-         * RP idles LOW on P3.7/P3.1 and pulses HIGH every 2 s.
-         * P3IFG latches the rising edge; we clear it after reading.
-         * If no pulse is seen within RP_WDT_TIMEOUT_S seconds, reset RP.
+         * Evaluated FIRST so we know whether the RP is alive before deciding
+         * whether to attempt I2C writes. A stalled I2C transaction (SCL held
+         * low by a crashed RP) blocks this task for ~748 ms per write, which
+         * can starve the Rx task long enough for the TPS3435 to fire and
+         * co-reset the MSP. Skipping writes while the RP is non-responsive
+         * keeps the CLK task on schedule.
+         *
+         * rp_i2c_ok == 0 means: RP is resetting or timed out — skip writes.
          * ---------------------------------------------------------------- */
+        uint8_t rp_i2c_ok = 0u;   /* assume unsafe until proven otherwise */
+
         if (rp_wdt_grace > 0u)
         {
             --rp_wdt_grace;
+            if (rp_wdt_grace == 0u)
+            {
+                /* Grace just expired — flush any edges that accumulated during
+                 * the reboot window so the next check only sees fresh pulses. */
+                P3IFG &= (uint8_t)~(BIT1 | BIT7);
+            }
+            /* RP is rebooting — skip I2C this tick */
         }
         else
         {
@@ -244,22 +223,65 @@ static void prvClockTask(void *pvParameters)
             if ((rp_ifg & BIT1) && (rp_ifg & BIT7))
             {
                 /* Rising edge seen on BOTH heartbeat lines — RP healthy */
-                P3IFG      &= (uint8_t)~(BIT1 | BIT7);
-                rp_wdt_timer = 0u;
+                P3IFG        &= (uint8_t)~(BIT1 | BIT7);
+                rp_wdt_timer  = 0u;
+                rp_i2c_ok     = 1u;
             }
             else
             {
-                if (++rp_wdt_timer >= RP_WDT_TIMEOUT_S)
+                ++rp_wdt_timer;
+                if (rp_wdt_timer >= RP_WDT_TIMEOUT_S)
                 {
                     rp_wdt_timer = 0u;
                     ++g_rp_reset_count;
                     GPIO_setOutputLowOnPin(RESET_RP_PORT, RESET_RP_PIN);
-                    vTaskDelay(pdMS_TO_TICKS(5u));   /* 5 ms — RUN pin spec is >1 ms */
+                    vTaskDelay(pdMS_TO_TICKS(5u));
                     GPIO_setOutputHighOnPin(RESET_RP_PORT, RESET_RP_PIN);
-                    supervisor_i2c_recover();        /* clear any stuck-bus state from interrupted transaction */
-                    rp_wdt_grace = RP_WDT_GRACE_S;  /* wait for RP reboot */
+                    supervisor_i2c_recover();
+                    rp_wdt_grace = RP_WDT_GRACE_S;
+                    /* rp_i2c_ok stays 0 — skip writes this tick */
+                }
+                else
+                {
+                    /* Timer counting but not yet expired — RP may still be
+                     * alive (just missed a pulse). Allow writes; NACK is fast. */
+                    rp_i2c_ok = 1u;
                 }
             }
+        }
+
+        /* --- Build STATUS0: WDT lines OK (both P2.2 and P3.4 high) --- */
+        uint8_t wdt_ok  = ((P2OUT & BIT2) && (P3OUT & BIT4)) ? 1u : 0u;
+        uint8_t rail_ok = (g_rega_en && g_efusea_en) ? 1u : 0u;
+
+        uint8_t s0 = (uint8_t)(
+              (0u & STATUS0_MODE_MASK)
+            | (wdt_ok  ? STATUS0_WDT_OK  : 0u)
+            | (rail_ok ? STATUS0_RAIL_OK : 0u));
+
+        uint8_t s1 = (uint8_t)(g_ina_ok ? 0u : STATUS1_OC_MCU);
+
+        /* Write RP regmap only when RP is known to be responsive.
+         * Skipping during grace / reset prevents multi-second I2C stalls. */
+        if (rp_i2c_ok)
+        {
+            #define RP_WRITE(reg, ptr, len) \
+                (void)i2c_write_reg(RP_I2C_ADDR, (reg), (ptr), (len)); \
+                vTaskDelay(pdMS_TO_TICKS(10u))
+
+            RP_WRITE(REG_MSP_STATUS0,     &s0, 1u);
+            RP_WRITE(REG_MSP_STATUS1,     &s1, 1u);
+            RP_WRITE(REG_TLM_MSP_STATUS0, &s0, 1u);
+
+            if (g_ina_ok)
+            {
+                uint16_t v_mv = g_ina_data.bus_mv;
+                int16_t  i_ma = g_ina_data.current_ma;
+                RP_WRITE(REG_TLM_VBATT_MV, (const uint8_t *)&v_mv, 2u);
+                RP_WRITE(REG_TLM_IBATT_MA, (const uint8_t *)&i_ma, 2u);
+            }
+
+            #undef RP_WRITE
         }
 
         /* Send tick to Rx task */

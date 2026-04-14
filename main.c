@@ -283,7 +283,7 @@ static void Init_GPIO(void)
     /* Inputs */
     GPIO_setAsInputPin(GPIO_PORT_P1, GPIO_PIN0 | GPIO_PIN1); // RegA_PG, RegB_PG
     GPIO_setAsInputPin(GPIO_PORT_P2, GPIO_PIN0 | GPIO_PIN1); // eFuseA_~FLT, eFuseB_~FLT
-    GPIO_setAsInputPin(GPIO_PORT_P3, GPIO_PIN1 | GPIO_PIN7); // WDT_RP2MSP2, WDT_RP2MSP1
+    GPIO_setAsInputPinWithPullDownResistor(GPIO_PORT_P3, GPIO_PIN1 | GPIO_PIN7); // WDT_RP2MSP2, WDT_RP2MSP1
     P3IES &= ~(BIT1 | BIT7);   /* rising edge (RP idles LOW, pulses HIGH) */
     P3IFG &= ~(BIT1 | BIT7);   /* clear any stale flags */
     
