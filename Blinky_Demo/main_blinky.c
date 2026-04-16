@@ -3,25 +3,32 @@
  *
  * Tasks
  * -----
- *  CLK  (1 Hz)   : increments second counter, sends tick to queue
- *  Rx   (1 Hz)   : receives tick, toggles LEDs, pulses external WDT lines
+ *  CLK  (1 Hz)   : increments second counter, drives RP regmap (writes + reads)
+ *  Rx   (1 Hz)   : receives tick, toggles LEDs, pulses external WDT lines,
+ *                  runs LED blink-code for RP state indication
  *  INA  (2 Hz)   : reads INA219 @ 0x41 (3V3_MSP supply current)
+ *
+ * Register map
+ * ------------
+ *  MSP writes:  0x20–0x21 (status), 0x22–0x27 (contact ack stub),
+ *               0x28 (mode cmd), 0x98–0x9A (voltage/current TLM),
+ *               0xA5 (TLM mode), 0xAE–0xAF (TLM status mirrors)
+ *  MSP reads:   0x00–0x03 (header magic), 0x10–0x17 (RP state/health),
+ *               0x30–0x33 (RP request flags), 0xF0–0xF5 (fault bitmap)
+ *  All stored in g_rp_reg_snapshot (FRAM) — inspect via JTAG after a run.
+ *
+ * Debug — no serial
+ * ------------------
+ *  1. FRAM snapshot  (g_rp_reg_snapshot) persists across resets.
+ *     Inspect in CCS debugger: hdr_ok, rp_state, rp_uptime_s, fault_bitmap.
+ *  2. LED blink code (LED0, P1.3) every 8 seconds:
+ *       N blinks = rp_state + 1   (1=BOOT, 2=INIT, 3=NOMINAL, 4=SAFE, 5=FAULT)
+ *       Rapid 10 Hz blink         = RP not responding (grace/reset active)
  *
  * Rail control
  * ------------
- *  Four volatile globals control the rail enable/shutdown pins.
- *  Set them to 0/1 in the debugger at runtime:
- *    g_rega_en   — RegA   ~EN  P2.4 (1=enabled, 0=disabled)
- *    g_regb_en   — RegB   ~EN  P4.4 (1=enabled, 0=disabled)
- *    g_efusea_en — eFuseA SHDN P3.2 (1=enabled, 0=shutdown)
- *    g_efuseb_en — eFuseB SHDN P1.5 (1=enabled, 0=shutdown)
- *  The Rx task applies these to the GPIO pins on every tick.
- *
- * RP regmap
- * ---------
- *  The CLK task writes MSP STATUS bytes to the RP regmap (I2C 0x42) once
- *  per second. Writes NACK with no RP connected — that is expected and safe.
- *  When the RP is powered and programmed it will start receiving immediately.
+ *  Debugger-accessible globals g_rega_en / g_regb_en / g_efusea_en / g_efuseb_en
+ *  control rail enable/shutdown pins. 1=enabled (default), 0=disabled.
  */
 
 #include "FreeRTOS.h"
@@ -47,19 +54,28 @@
 /* ------------------------------------------------------------------
  * WDT pulse config (MSP external WDT chip heartbeats)
  * ------------------------------------------------------------------ */
-/* At 8 MHz, 8 cycles ≈ 1 µs  >  500 ns minimum pulse width */
 #define WDT_LOW_CYCLES          ( 8U )
-#define WDT_PULSE_PERIOD_S      ( 2U )   /* pulse WDT lines every N seconds */
+#define WDT_PULSE_PERIOD_S      ( 2U )
 
 /* ------------------------------------------------------------------
  * RP watchdog monitor
- * RP idles LOW on P3.7 (GP5) and P3.1 (GP8), pulses HIGH every 2 s.
- * Rising edges latch in P3IFG — polled here, no ISR needed.
  * ------------------------------------------------------------------ */
-#define RP_WDT_TIMEOUT_S        ( 6U )   /* seconds without heartbeat → reset RP */
-#define RP_WDT_GRACE_S          ( 10U )  /* grace period after boot/RP reset */
+#define RP_WDT_TIMEOUT_S        ( 6U )
+#define RP_WDT_GRACE_S          ( 10U )
 #define RESET_RP_PORT           GPIO_PORT_P2
 #define RESET_RP_PIN            GPIO_PIN6
+
+/* ------------------------------------------------------------------
+ * LED blink code
+ * RP state blink: N = rp_state+1 blinks every BLINK_INTERVAL_S seconds.
+ * Rapid blink when RP is in grace/reset window.
+ * ------------------------------------------------------------------ */
+#define BLINK_INTERVAL_S        ( 8U )
+#define BLINK_ON_MS             ( 120U )
+#define BLINK_OFF_MS            ( 120U )
+#define BLINK_GAP_MS            ( 700U )   /* dark pause after sequence */
+#define BLINK_RAPID_MS          ( 50U )    /* rapid: RP not responding  */
+#define BLINK_RAPID_COUNT       ( 10U )
 
 /* INA219 instance — 3V3_MSP supply line, address 0x41 */
 static const ina219_t g_ina_3v3_msp = {
@@ -73,17 +89,16 @@ static const ina219_t g_ina_3v3_msp = {
  * Rail enable/disable GPIO
  * ------------------------------------------------------------------ */
 #define REGA_EN_PORT    GPIO_PORT_P2
-#define REGA_EN_PIN     GPIO_PIN4   /* active-low enable */
+#define REGA_EN_PIN     GPIO_PIN4
 #define REGB_EN_PORT    GPIO_PORT_P4
-#define REGB_EN_PIN     GPIO_PIN4   /* active-low enable */
+#define REGB_EN_PIN     GPIO_PIN4
 #define EFUSEA_SHDN_PORT GPIO_PORT_P3
-#define EFUSEA_SHDN_PIN  GPIO_PIN2  /* HIGH = shutdown */
+#define EFUSEA_SHDN_PIN  GPIO_PIN2
 #define EFUSEB_SHDN_PORT GPIO_PORT_P1
-#define EFUSEB_SHDN_PIN  GPIO_PIN5  /* HIGH = shutdown */
+#define EFUSEB_SHDN_PIN  GPIO_PIN5
 
 /* ------------------------------------------------------------------
  * Debugger-accessible rail control globals
- * 1 = rail enabled (default), 0 = rail disabled
  * ------------------------------------------------------------------ */
 volatile uint8_t g_rega_en   = 1u;
 volatile uint8_t g_regb_en   = 1u;
@@ -91,33 +106,48 @@ volatile uint8_t g_efusea_en = 1u;
 volatile uint8_t g_efuseb_en = 1u;
 
 /* ------------------------------------------------------------------
- * Shared INA219 result — live working copy in RAM (volatile, lost on reset).
+ * INA219 results
  * ------------------------------------------------------------------ */
 volatile ina219_data_t g_ina_data = { 0, 0, 0, 0 };
-volatile uint8_t       g_ina_ok   = 0u;  /* 1 = last read succeeded */
+volatile uint8_t       g_ina_ok   = 0u;
 
-/* ------------------------------------------------------------------
- * FRAM snapshot — only written on a confirmed successful read.
- * Survives full power-off. Safe to inspect after JTAG reconnect because
- * the INA task only touches this when ina219_read() returns INA219_OK.
- * If the INA219 has no power on reconnect, init NACKs → snapshot unchanged.
- * Read g_ina_snapshot (not g_ina_data) in the debugger after a standalone run.
- * ------------------------------------------------------------------ */
 #pragma PERSISTENT(g_ina_snapshot)
-ina219_data_t g_ina_snapshot = { 0, 0, 0, 0 };  /* last confirmed good reading — in FRAM */
+ina219_data_t g_ina_snapshot = { 0, 0, 0, 0 };
 
 #pragma PERSISTENT(g_ina_snapshot_ok)
-uint8_t g_ina_snapshot_ok = 0u;     /* 1 = g_ina_snapshot contains valid data */
+uint8_t g_ina_snapshot_ok = 0u;
 
-/* Diagnostic: last error codes from INA task — inspect after standalone run */
 #pragma PERSISTENT(g_ina_diag_init_rc)
-int8_t g_ina_diag_init_rc = 0;      /* last return code from ina219_init() */
+int8_t g_ina_diag_init_rc = 0;
 
 #pragma PERSISTENT(g_ina_diag_read_rc)
-int8_t g_ina_diag_read_rc = 0;      /* last return code from ina219_read() */
+int8_t g_ina_diag_read_rc = 0;
 
 #pragma PERSISTENT(g_ina_diag_attempts)
-uint16_t g_ina_diag_attempts = 0u;  /* total number of init attempts */
+uint16_t g_ina_diag_attempts = 0u;
+
+/* ------------------------------------------------------------------
+ * RP register snapshot — FRAM persistent, inspect via JTAG after a run.
+ * Updated by the CLK task every second from I2C reads.
+ * ------------------------------------------------------------------ */
+typedef struct {
+    uint8_t  hdr_magic[4];         /* bytes from 0x00–0x03 ('H','I','A','1') */
+    uint8_t  hdr_version;          /* REG_REGMAP_VERSION (0x04)              */
+    uint8_t  hdr_ok;               /* 1 = magic verified on last read        */
+    uint8_t  rp_state;             /* REG_RP_STATE (0x10)                    */
+    uint32_t rp_uptime_s;          /* REG_RP_UPTIME0–3 (0x11–0x14)           */
+    uint16_t rp_hb_counter;        /* REG_RP_HB0–1 (0x15–0x16)              */
+    uint8_t  rp_last_error;        /* REG_RP_LAST_ERROR (0x17)               */
+    uint8_t  contact_evt_pending;  /* REG_CONTACT_EVT_PENDING (0x1B)         */
+    uint8_t  rp_req_flags;         /* REG_RP_REQ_FLAGS (0x30)                */
+    uint8_t  rp_req_code;          /* REG_RP_REQ_CODE (0x31)                 */
+    uint16_t fault_bitmap;         /* REG_FAULT_BITMAP_L/H (0xF0–0xF1)       */
+    uint8_t  fault_seq;            /* REG_FAULT_SEQ (0xF2)                   */
+    uint8_t  cnt_i2c_err;          /* REG_CNT_I2C_ERR (0xF5)                 */
+} rp_reg_snapshot_t;
+
+#pragma PERSISTENT(g_rp_reg_snapshot)
+rp_reg_snapshot_t g_rp_reg_snapshot = { {0,0,0,0}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
 /* ------------------------------------------------------------------
  * Internal state
@@ -129,11 +159,16 @@ uint16_t g_boot_count;
 uint32_t g_current_second;
 
 #pragma PERSISTENT(g_rp_reset_count)
-uint16_t g_rp_reset_count = 0u;   /* total RP resets issued — inspect after standalone run */
+uint16_t g_rp_reset_count = 0u;
+
+/* Shared between CLK and Rx: CLK sets flag, Rx consumes it for blink */
+static volatile uint8_t g_blink_pending  = 0u;  /* 1 = run blink sequence  */
+static volatile uint8_t g_blink_rp_state = 0u;  /* state to blink          */
+static volatile uint8_t g_blink_rapid    = 0u;  /* 1 = rapid (RP down)     */
 
 static QueueHandle_t xTickQueue = NULL;
 
-extern volatile uint16_t g_last_sysrstiv;   /* captured in main.c */
+extern volatile uint16_t g_last_sysrstiv;
 
 /* ------------------------------------------------------------------
  * Forward declarations
@@ -145,9 +180,12 @@ static void prvInaTask    (void *pvParameters);
 static inline void prvApplyRailEnables(void);
 static inline void prvPulseWdt1(void);
 static inline void prvPulseWdt2(void);
+static inline void prvLedSet(uint8_t on);
+static void        prvRunBlinkSequence(void);
+static int8_t      prv_rp_read(uint8_t reg, uint8_t *buf, uint8_t len);
 
 /* ------------------------------------------------------------------
- * Entry point called from main()
+ * Entry point
  * ------------------------------------------------------------------ */
 void main_blinky(void)
 {
@@ -160,7 +198,6 @@ void main_blinky(void)
     }
     ++g_boot_count;
 
-    /* Apply default rail state (all enabled) before scheduler starts */
     prvApplyRailEnables();
 
     xTickQueue = xQueueCreate(8u, sizeof(uint8_t));
@@ -172,47 +209,49 @@ void main_blinky(void)
 
     vTaskStartScheduler();
 
-    /* Reach here only if heap was too small to create idle/timer tasks */
     for (;;);
 }
 
 /* ------------------------------------------------------------------
- * CLK task — 1 Hz heartbeat
- * Sends a tick token to the Rx task and attempts to write MSP status
- * to the RP regmap. Writes will NACK until RP is connected.
+ * CLK task — 1 Hz heartbeat, RP regmap I/O
  * ------------------------------------------------------------------ */
 static void prvClockTask(void *pvParameters)
 {
-    TickType_t xNext      = xTaskGetTickCount();
-    uint8_t    tick       = 1u;
-    uint8_t    rp_wdt_timer = 0u;
-    uint8_t    rp_wdt_grace = RP_WDT_GRACE_S;
+    TickType_t xNext         = xTaskGetTickCount();
+    uint8_t    tick          = 1u;
+    uint8_t    rp_wdt_timer  = 0u;
+    uint8_t    rp_wdt_grace  = RP_WDT_GRACE_S;
+    uint8_t    blink_counter = 0u;
+    uint8_t    last_cmd_seq  = 0u;   /* track CMD_SEQ written to RP */
     (void)pvParameters;
+
+    /* Convenience macro: write one register to RP then yield briefly so
+     * CircuitPython can process it before the next transaction. */
+    #define RP_WRITE(reg, ptr, len) \
+        (void)i2c_write_reg(RP_I2C_ADDR, (reg), (ptr), (len)); \
+        vTaskDelay(pdMS_TO_TICKS(10u))
+
+    /* prv_rp_read used in place of the old RP_READ macro so the return
+     * value is usable in if() conditions. */
 
     for (;;)
     {
         vTaskDelayUntil(&xNext, pdMS_TO_TICKS(1000u));
         ++g_current_second;
 
-        /* ---- RP watchdog monitor (polled P3IFG, no ISR) ----------------
-         * Evaluated FIRST so we know whether the RP is alive before deciding
-         * whether to attempt I2C writes. A stalled I2C transaction (SCL held
-         * low by a crashed RP) blocks this task for ~748 ms per write, which
-         * can starve the Rx task long enough for the TPS3435 to fire and
-         * co-reset the MSP. Skipping writes while the RP is non-responsive
-         * keeps the CLK task on schedule.
-         *
-         * rp_i2c_ok == 0 means: RP is resetting or timed out — skip writes.
+        /* ---- RP watchdog monitor  (evaluated FIRST — determines rp_i2c_ok)
+         * Skipping I2C writes when RP is non-responsive prevents multi-second
+         * stalls that would starve the Rx task and trigger TPS3435 co-reset.
          * ---------------------------------------------------------------- */
-        uint8_t rp_i2c_ok = 0u;   /* assume unsafe until proven otherwise */
+        uint8_t rp_i2c_ok = 0u;
 
         if (rp_wdt_grace > 0u)
         {
             --rp_wdt_grace;
             if (rp_wdt_grace == 0u)
             {
-                /* Grace just expired — flush any edges that accumulated during
-                 * the reboot window so the next check only sees fresh pulses. */
+                /* Grace just expired — flush stale edge latches so only fresh
+                 * pulses count toward the next timeout window. */
                 P3IFG &= (uint8_t)~(BIT1 | BIT7);
             }
             /* RP is rebooting — skip I2C this tick */
@@ -222,7 +261,6 @@ static void prvClockTask(void *pvParameters)
             uint8_t rp_ifg = P3IFG & (BIT1 | BIT7);
             if ((rp_ifg & BIT1) && (rp_ifg & BIT7))
             {
-                /* Rising edge seen on BOTH heartbeat lines — RP healthy */
                 P3IFG        &= (uint8_t)~(BIT1 | BIT7);
                 rp_wdt_timer  = 0u;
                 rp_i2c_ok     = 1u;
@@ -243,35 +281,58 @@ static void prvClockTask(void *pvParameters)
                 }
                 else
                 {
-                    /* Timer counting but not yet expired — RP may still be
-                     * alive (just missed a pulse). Allow writes; NACK is fast. */
+                    /* Timer counting but not expired — RP likely still alive */
                     rp_i2c_ok = 1u;
                 }
             }
         }
 
-        /* --- Build STATUS0: WDT lines OK (both P2.2 and P3.4 high) --- */
+        /* ---- Signal Rx task: trigger blink every BLINK_INTERVAL_S seconds */
+        if (++blink_counter >= BLINK_INTERVAL_S)
+        {
+            blink_counter       = 0u;
+            g_blink_rp_state    = g_rp_reg_snapshot.rp_state;
+            g_blink_rapid       = (rp_wdt_grace > 0u) ? 1u : 0u;
+            g_blink_pending     = 1u;
+        }
+
+        /* ---- Build MSP status bytes ---------------------------------------- */
         uint8_t wdt_ok  = ((P2OUT & BIT2) && (P3OUT & BIT4)) ? 1u : 0u;
         uint8_t rail_ok = (g_rega_en && g_efusea_en) ? 1u : 0u;
+        uint8_t batt_ok = g_ina_ok;
 
         uint8_t s0 = (uint8_t)(
-              (0u & STATUS0_MODE_MASK)
+              (MODE_STARTUP & STATUS0_MODE_MASK)
             | (wdt_ok  ? STATUS0_WDT_OK  : 0u)
+            | (batt_ok ? STATUS0_BATT_OK : 0u)
             | (rail_ok ? STATUS0_RAIL_OK : 0u));
 
         uint8_t s1 = (uint8_t)(g_ina_ok ? 0u : STATUS1_OC_MCU);
 
-        /* Write RP regmap only when RP is known to be responsive.
-         * Skipping during grace / reset prevents multi-second I2C stalls. */
+        uint8_t mode_byte = MODE_STARTUP;   /* SM not implemented yet */
+
+        /* ---- I2C writes to RP (only when RP is known responsive) ----------- */
         if (rp_i2c_ok)
         {
-            #define RP_WRITE(reg, ptr, len) \
-                (void)i2c_write_reg(RP_I2C_ADDR, (reg), (ptr), (len)); \
-                vTaskDelay(pdMS_TO_TICKS(10u))
+            /* --- MSP status --- */
+            RP_WRITE(REG_MSP_STATUS0,     &s0,        1u);
+            RP_WRITE(REG_MSP_STATUS1,     &s1,        1u);
 
-            RP_WRITE(REG_MSP_STATUS0,     &s0, 1u);
-            RP_WRITE(REG_MSP_STATUS1,     &s1, 1u);
-            RP_WRITE(REG_TLM_MSP_STATUS0, &s0, 1u);
+            /* --- Contact ack stub (all zeros — no radio on dev board) --- */
+            static const uint8_t ack_stub[6] = { 0u, 0u, 0u, 0u, 0u, 0u };
+            RP_WRITE(REG_CONTACT_ACK_SEQ, ack_stub,   6u);
+
+            /* --- Mode command (STARTUP; no state machine yet) --- */
+            RP_WRITE(REG_MODE_CMD,        &mode_byte, 1u);
+
+            /* Increment CMD_SEQ so RP can ACK (monotonic, wraps at 255) */
+            ++last_cmd_seq;
+            RP_WRITE(REG_CMD_SEQ,         &last_cmd_seq, 1u);
+
+            /* --- Telemetry --- */
+            RP_WRITE(REG_TLM_MODE,        &mode_byte, 1u);
+            RP_WRITE(REG_TLM_MSP_STATUS0, &s0,        1u);
+            RP_WRITE(REG_TLM_MSP_STATUS1, &s1,        1u);
 
             if (g_ina_ok)
             {
@@ -281,8 +342,61 @@ static void prvClockTask(void *pvParameters)
                 RP_WRITE(REG_TLM_IBATT_MA, (const uint8_t *)&i_ma, 2u);
             }
 
-            #undef RP_WRITE
+            /* TLM_TBATT_CC — no sensor on dev board, leave as zero */
+
+            /* ---- I2C reads from RP ---------------------------------------- */
+            uint8_t rd[8];
+
+            /* Header magic — check every 4 s */
+            if ((g_current_second & 0x03u) == 0u)
+            {
+                if (prv_rp_read(REG_MAGIC0, rd, 5u) == I2C_OK)
+                {
+                    memcpy(g_rp_reg_snapshot.hdr_magic, rd, 4u);
+                    g_rp_reg_snapshot.hdr_version = rd[4];
+                    g_rp_reg_snapshot.hdr_ok =
+                        (rd[0] == HDR_MAGIC0_VAL &&
+                         rd[1] == HDR_MAGIC1_VAL &&
+                         rd[2] == HDR_MAGIC2_VAL &&
+                         rd[3] == HDR_MAGIC3_VAL) ? 1u : 0u;
+                }
+            }
+
+            /* RP state/health block (0x10–0x17) — every second */
+            if (prv_rp_read(REG_RP_STATE, rd, 8u) == I2C_OK)
+            {
+                g_rp_reg_snapshot.rp_state       = rd[0];
+                g_rp_reg_snapshot.rp_uptime_s    = (uint32_t)rd[1]
+                                                  | ((uint32_t)rd[2] << 8)
+                                                  | ((uint32_t)rd[3] << 16)
+                                                  | ((uint32_t)rd[4] << 24);
+                g_rp_reg_snapshot.rp_hb_counter  = (uint16_t)rd[5]
+                                                  | ((uint16_t)rd[6] << 8);
+                g_rp_reg_snapshot.rp_last_error  = rd[7];
+            }
+
+            /* RP request flags (0x30–0x33) — every second */
+            if (prv_rp_read(REG_RP_REQ_FLAGS, rd, 4u) == I2C_OK)
+            {
+                g_rp_reg_snapshot.rp_req_flags = rd[0];
+                g_rp_reg_snapshot.rp_req_code  = rd[1];
+            }
+
+            /* Fault bitmap (0xF0–0xF5) — every 4 s */
+            if ((g_current_second & 0x03u) == 0u)
+            {
+                if (prv_rp_read(REG_FAULT_BITMAP_L, rd, 6u) == I2C_OK)
+                {
+                    g_rp_reg_snapshot.fault_bitmap = (uint16_t)rd[0]
+                                                   | ((uint16_t)rd[1] << 8);
+                    g_rp_reg_snapshot.fault_seq    = rd[2];
+                    /* rd[3] = LATCH_FLAGS, rd[4] = reserved, rd[5] = CNT_I2C_ERR */
+                    g_rp_reg_snapshot.cnt_i2c_err  = rd[5];
+                }
+            }
         }
+
+        #undef RP_WRITE
 
         /* Send tick to Rx task */
         xQueueSend(xTickQueue, &tick, 0u);
@@ -290,8 +404,7 @@ static void prvClockTask(void *pvParameters)
 }
 
 /* ------------------------------------------------------------------
- * Rx task — LED toggle + WDT pulse on each 1 Hz tick
- * Also re-applies rail enable GPIO on every tick (debugger safe).
+ * Rx task — LED toggle + WDT pulse + LED blink code
  * ------------------------------------------------------------------ */
 static void prvRxTask(void *pvParameters)
 {
@@ -304,11 +417,7 @@ static void prvRxTask(void *pvParameters)
     {
         xQueueReceive(xTickQueue, &tick, portMAX_DELAY);
 
-        /* Toggle activity LEDs */
-        vParTestToggleLED(0);
-        vParTestToggleLED(1);
-
-        /* Apply rail enables (safe to call every tick — just GPIO writes) */
+        /* Apply rail enables */
         prvApplyRailEnables();
 
         /* Pulse WDT1 (P2.2) */
@@ -324,12 +433,26 @@ static void prvRxTask(void *pvParameters)
             wdt2_counter = 0u;
             prvPulseWdt2();
         }
+
+        /* LED blink code — consumes blink_pending flag set by CLK task.
+         * Runs blink sequence here (inside Rx) so we can use vTaskDelay
+         * without affecting CLK task timing. Maximum blocking ~1.5 s which
+         * is within the 2-second WDT pulse window. */
+        if (g_blink_pending)
+        {
+            g_blink_pending = 0u;
+            prvRunBlinkSequence();
+        }
+        else
+        {
+            /* Normal 1 Hz activity toggle */
+            vParTestToggleLED(0);
+        }
     }
 }
 
 /* ------------------------------------------------------------------
  * INA task — read INA219 @ 0x41 at 2 Hz
- * Stores full result in g_ina_data / g_ina_ok for the CLK task.
  * ------------------------------------------------------------------ */
 static void prvInaTask(void *pvParameters)
 {
@@ -338,8 +461,6 @@ static void prvInaTask(void *pvParameters)
     ina219_data_t data;
     (void)pvParameters;
 
-    /* If a valid snapshot already exists, wait 15 s before touching the INA.
-     * This gives time to connect JTAG and halt before the snapshot is overwritten. */
     if (g_ina_snapshot_ok)
         vTaskDelay(pdMS_TO_TICKS(15000u));
 
@@ -347,18 +468,16 @@ static void prvInaTask(void *pvParameters)
     {
         vTaskDelayUntil(&xNext, pdMS_TO_TICKS(500u));
 
-        /* Write config + calibration on first successful contact */
         if (!inited)
         {
             int8_t irc = ina219_init(&g_ina_3v3_msp);
             g_ina_diag_init_rc = irc;
             ++g_ina_diag_attempts;
             if (irc != INA219_OK)
-                continue;   /* sensor not ready yet — try again next cycle */
+                continue;
             inited = 1u;
         }
 
-        /* Read all four data registers */
         {
             int8_t rrc = ina219_read(&g_ina_3v3_msp, &data);
             g_ina_diag_read_rc = rrc;
@@ -366,45 +485,103 @@ static void prvInaTask(void *pvParameters)
             {
                 g_ina_data        = data;
                 g_ina_ok          = 1u;
-                g_ina_snapshot    = data;   /* persist to FRAM — only on confirmed read */
+                g_ina_snapshot    = data;
                 g_ina_snapshot_ok = 1u;
             }
             else
             {
                 g_ina_ok = 0u;
-                inited   = 0u;   /* re-init next time */
+                inited   = 0u;
             }
         }
     }
 }
 
 /* ------------------------------------------------------------------
+ * RP I2C read helper — performs read then yields 10 ms so CircuitPython
+ * can process the next transaction.  Returns the i2c_read_reg() result
+ * so callers can use it in if() conditions (the old RP_READ macro could
+ * not be used that way).
+ * ------------------------------------------------------------------ */
+static int8_t prv_rp_read(uint8_t reg, uint8_t *buf, uint8_t len)
+{
+    int8_t rc = i2c_read_reg(RP_I2C_ADDR, reg, buf, (uint8_t)len);
+    vTaskDelay(pdMS_TO_TICKS(10u));
+    return rc;
+}
+
+/* ------------------------------------------------------------------
+ * LED blink sequence
+ *
+ * Rapid mode (RP down):  BLINK_RAPID_COUNT fast pulses
+ * Normal mode:           rp_state+1 pulses at BLINK_ON/OFF_MS cadence,
+ *                        then BLINK_GAP_MS dark pause
+ *
+ * Uses vTaskDelay — Rx task blocks during blink (~1 s max).
+ * WDT_PULSE_PERIOD_S = 2 s so one missed tick is always safe.
+ * ------------------------------------------------------------------ */
+static void prvRunBlinkSequence(void)
+{
+    uint8_t i;
+
+    if (g_blink_rapid)
+    {
+        for (i = 0u; i < BLINK_RAPID_COUNT; i++)
+        {
+            prvLedSet(1u);
+            vTaskDelay(pdMS_TO_TICKS(BLINK_RAPID_MS));
+            prvLedSet(0u);
+            vTaskDelay(pdMS_TO_TICKS(BLINK_RAPID_MS));
+        }
+        return;
+    }
+
+    /* N = rp_state + 1, clamped to [1, 8] */
+    uint8_t n = (uint8_t)(g_blink_rp_state + 1u);
+    if (n > 8u) n = 8u;
+
+    for (i = 0u; i < n; i++)
+    {
+        prvLedSet(1u);
+        vTaskDelay(pdMS_TO_TICKS(BLINK_ON_MS));
+        prvLedSet(0u);
+        if (i < (uint8_t)(n - 1u))
+            vTaskDelay(pdMS_TO_TICKS(BLINK_OFF_MS));
+    }
+    vTaskDelay(pdMS_TO_TICKS(BLINK_GAP_MS));
+}
+
+/* ------------------------------------------------------------------
+ * LED direct drive helper (P1.3 = LED0)
+ * ------------------------------------------------------------------ */
+static inline void prvLedSet(uint8_t on)
+{
+    if (on)
+        GPIO_setOutputHighOnPin(GPIO_PORT_P1, GPIO_PIN3);
+    else
+        GPIO_setOutputLowOnPin(GPIO_PORT_P1, GPIO_PIN3);
+}
+
+/* ------------------------------------------------------------------
  * Rail enable helper
- * ~EN pins: LOW = enabled, HIGH = disabled
- * SHDN pins: LOW = active, HIGH = shutdown
  * ------------------------------------------------------------------ */
 static inline void prvApplyRailEnables(void)
 {
-    /* RegA ~EN */
-    if (g_rega_en)   GPIO_setOutputLowOnPin (REGA_EN_PORT,    REGA_EN_PIN);
-    else             GPIO_setOutputHighOnPin(REGA_EN_PORT,    REGA_EN_PIN);
+    if (g_rega_en)   GPIO_setOutputLowOnPin (REGA_EN_PORT,     REGA_EN_PIN);
+    else             GPIO_setOutputHighOnPin(REGA_EN_PORT,     REGA_EN_PIN);
 
-    /* RegB ~EN */
-    if (g_regb_en)   GPIO_setOutputLowOnPin (REGB_EN_PORT,    REGB_EN_PIN);
-    else             GPIO_setOutputHighOnPin(REGB_EN_PORT,    REGB_EN_PIN);
+    if (g_regb_en)   GPIO_setOutputLowOnPin (REGB_EN_PORT,     REGB_EN_PIN);
+    else             GPIO_setOutputHighOnPin(REGB_EN_PORT,     REGB_EN_PIN);
 
-    /* eFuseA SHDN */
     if (g_efusea_en) GPIO_setOutputLowOnPin (EFUSEA_SHDN_PORT, EFUSEA_SHDN_PIN);
     else             GPIO_setOutputHighOnPin(EFUSEA_SHDN_PORT, EFUSEA_SHDN_PIN);
 
-    /* eFuseB SHDN */
     if (g_efuseb_en) GPIO_setOutputLowOnPin (EFUSEB_SHDN_PORT, EFUSEB_SHDN_PIN);
     else             GPIO_setOutputHighOnPin(EFUSEB_SHDN_PORT, EFUSEB_SHDN_PIN);
 }
 
 /* ------------------------------------------------------------------
- * WDT pulse helpers — brief low pulse then return high
- * Wrapped in critical section to keep pulse width tight.
+ * WDT pulse helpers
  * ------------------------------------------------------------------ */
 static inline void prvPulseWdt1(void)
 {
@@ -423,4 +600,3 @@ static inline void prvPulseWdt2(void)
     P3OUT |= BIT4;
     taskEXIT_CRITICAL();
 }
-

@@ -122,16 +122,25 @@ int8_t i2c_read_reg(uint8_t addr, uint8_t reg, uint8_t *buf, uint8_t len)
 
     EUSCI_B_I2C_setSlaveAddress(EUSCI_B0_BASE, addr);
 
-    /* Phase 1: write register address */
+    /* Phase 1: write register address then STOP.
+     * Using STOP+START (not repeated-START) so that CircuitPython I2CTarget
+     * sees two fully independent transactions.  With repeated-START the RP
+     * may serve the read phase before on_i2c_write() commits _reg_ptr, which
+     * causes the read to return data at the wrong offset. */
     EUSCI_B_I2C_setMode(EUSCI_B0_BASE, EUSCI_B_I2C_TRANSMIT_MODE);
     UCB0IFG   &= (uint16_t)~(UCTXIFG0 | UCNACKIFG);
     UCB0CTLW0 |= UCTR | UCTXSTT;
     WAIT_TXIFG(done);
     UCB0TXBUF = reg;
-    WAIT_TXIFG(done);   /* wait for byte to shift out before repeated START */
+    WAIT_TXIFG(done);
+    UCB0CTLW0 |= UCTXSTP;
+    WAIT_STOP(done);
 
-    /* Phase 2: repeated START, switch to RX */
+    /* Phase 2: new START for read.
+     * Clock-stretching on the target holds SCL until req.write() is called,
+     * so no explicit delay is needed between the STOP and this START. */
     EUSCI_B_I2C_setMode(EUSCI_B0_BASE, EUSCI_B_I2C_RECEIVE_MODE);
+    UCB0IFG   &= (uint16_t)~(UCRXIFG0 | UCNACKIFG);
 
     if (len == 1u) {
         UCB0CTLW0 |= UCTXSTT;
