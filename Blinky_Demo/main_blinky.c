@@ -173,7 +173,7 @@ typedef struct {
     uint8_t  oc_latched;            /* 1 = OC fault active                          */
     uint8_t  oc_decay_ctr;          /* seconds since last OC; decay at 30           */
     uint8_t  uv_load;               /* 1 = UV_LOAD active (<2900 mV)                */
-    uint8_t  ext_trip;              /* 1 = WDT_EXT_TRIP (RST pin at boot)           */
+    uint8_t  ext_trip;              /* sticky: 1 = RST pin asserted at any boot      */
 } hia_fault_t;
 
 #pragma PERSISTENT(g_fault)
@@ -233,7 +233,7 @@ void main_blinky(void)
     }
     ++g_boot_count;
 
-    /* Detect external WDT trip (TPS3435 RST pin assertion) */
+    /* Detect external WDT trip (TPS3435 RST pin assertion) — sticky, cleared by ground command */
     if (boot_cause == SYSRSTIV_RSTNMI)
         g_fault.ext_trip = 1u;
 
