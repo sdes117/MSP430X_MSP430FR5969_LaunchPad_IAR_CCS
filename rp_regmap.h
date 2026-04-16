@@ -26,6 +26,7 @@
 #define REG_REGMAP_LEN_L        (0x05u)   /* total length LSB (0x00 = 256)   */
 #define REG_REGMAP_LEN_H        (0x06u)   /* total length MSB (0x01 = 256)   */
 #define REG_ENDIAN              (0x07u)   /* 0 = little-endian               */
+#define REG_WDT_PERIOD_S        (0x08u)   /* RP heartbeat period in seconds  */
 #define REG_I2C_ADDR_HDR        (0x0Cu)   /* self-reported I2C address       */
 #define REG_HDR_CRC_L           (0x0Eu)   /* CRC16 over 0x00–0x0D LSB        */
 #define REG_HDR_CRC_H           (0x0Fu)   /* CRC16 over 0x00–0x0D MSB        */
@@ -150,6 +151,15 @@
  * ------------------------------------------------------------------ */
 #define STATUS1_OC_MCU          (1u << 0)   /* eFuse OC on 3V3 MSP rail      */
 #define STATUS1_UV_LOAD         (1u << 1)   /* regulator PG lost             */
+
+/* ------------------------------------------------------------------
+ * MSP fault bitmap bit fields (MSP-local; reflected in STATUS1 and
+ * stored in g_fault / g_rp_reg_snapshot for JTAG inspection)
+ * ------------------------------------------------------------------ */
+#define FAULT_BIT_WDT_RP_MISS   (1u << 0)   /* RP reset counter tripped       */
+#define FAULT_BIT_WDT_EXT_TRIP  (1u << 1)   /* RST-pin reset detected at boot  */
+#define FAULT_BIT_PWR_OC_MCU    (1u << 2)   /* 3V3_MSP overcurrent (>100 mA)  */
+#define FAULT_BIT_PWR_UV_LOAD   (1u << 3)   /* bus voltage undervoltage        */
 
 /* ------------------------------------------------------------------
  * MSP mode enum (written to REG_TLM_MODE and mode field of STATUS0)

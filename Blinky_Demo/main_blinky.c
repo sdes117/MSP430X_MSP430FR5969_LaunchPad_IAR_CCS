@@ -55,7 +55,7 @@
  * WDT pulse config (MSP external WDT chip heartbeats)
  * ------------------------------------------------------------------ */
 #define WDT_LOW_CYCLES          ( 8U )
-#define WDT_PULSE_PERIOD_S      ( 2U )
+#define MSP_WDT_PERIOD_S      ( 2U )
 
 /* ------------------------------------------------------------------
  * RP watchdog monitor
@@ -161,6 +161,37 @@ uint32_t g_current_second;
 #pragma PERSISTENT(g_rp_reset_count)
 uint16_t g_rp_reset_count = 0u;
 
+/* ------------------------------------------------------------------
+ * HIA fault state — PERSISTENT so accumulation survives warm resets.
+ * All per-run counters (oc, uv) are reset in main_blinky() each boot;
+ * wdt_miss_count and ext_trip carry across reboots by design.
+ * ------------------------------------------------------------------ */
+typedef struct {
+    uint8_t  wdt_miss_count;        /* per-line misses per period; SAFE at >=3      */
+    uint8_t  wdt_miss_decay_ctr;    /* seconds of healthy RP; decrement at 60       */
+    uint8_t  oc_consec;             /* consecutive OC samples; latch at 3           */
+    uint8_t  oc_latched;            /* 1 = OC fault active                          */
+    uint8_t  oc_decay_ctr;          /* seconds since last OC; decay at 30           */
+    uint8_t  uv_load;               /* 1 = UV_LOAD active (<2900 mV)                */
+    uint8_t  ext_trip;              /* 1 = WDT_EXT_TRIP (RST pin at boot)           */
+} hia_fault_t;
+
+#pragma PERSISTENT(g_fault)
+hia_fault_t g_fault = { 0u, 0u, 0u, 0u, 0u, 0u, 0u };
+
+/* MSP operating mode — PERSISTENT for JTAG inspection of last-run mode.
+ * prvModeUpdate() forces STARTUP when g_post_passed==0, so the effective
+ * mode on each boot starts at STARTUP regardless of persisted value. */
+#pragma PERSISTENT(g_msp_mode)
+uint8_t g_msp_mode = MODE_STARTUP;
+
+/* POST gate — non-persistent, re-evaluated each boot from fresh sensor reads */
+uint8_t g_post_passed = 0u;
+
+/* RP heartbeat period — read from REG_WDT_PERIOD_S at runtime; default 2 s.
+ * WDT miss assessment fires once per this many CLK ticks. */
+static uint8_t g_wdt_period_s = 2u;
+
 /* Shared between CLK and Rx: CLK sets flag, Rx consumes it for blink */
 static volatile uint8_t g_blink_pending  = 0u;  /* 1 = run blink sequence  */
 static volatile uint8_t g_blink_rp_state = 0u;  /* state to blink          */
@@ -183,6 +214,10 @@ static inline void prvPulseWdt2(void);
 static inline void prvLedSet(uint8_t on);
 static void        prvRunBlinkSequence(void);
 static int8_t      prv_rp_read(uint8_t reg, uint8_t *buf, uint8_t len);
+static void        prvFaultUpdate(uint8_t rp_i2c_ok, uint8_t wdt_miss_lines,
+                                  int16_t current_ma,
+                                  uint16_t bus_mv, uint8_t ina_valid);
+static void        prvModeUpdate (uint8_t rp_wdt_grace, uint8_t rp_state);
 
 /* ------------------------------------------------------------------
  * Entry point
@@ -197,6 +232,22 @@ void main_blinky(void)
             g_current_second = 0u;
     }
     ++g_boot_count;
+
+    /* Detect external WDT trip (TPS3435 RST pin assertion) */
+    if (boot_cause == SYSRSTIV_RSTNMI)
+        g_fault.ext_trip = 1u;
+
+    /* RegB and EfuseB hardware is removed — force them off unconditionally */
+    g_regb_en   = 0u;
+    g_efuseb_en = 0u;
+
+    /* Clear per-run fault state — re-evaluated from fresh sensor readings.
+     * wdt_miss_count and ext_trip carry over intentionally. */
+    g_fault.uv_load          = 0u;
+    g_fault.oc_consec        = 0u;
+    g_fault.oc_latched       = 0u;
+    g_fault.oc_decay_ctr     = 0u;
+    g_fault.wdt_miss_decay_ctr = 0u;
 
     prvApplyRailEnables();
 
@@ -217,12 +268,14 @@ void main_blinky(void)
  * ------------------------------------------------------------------ */
 static void prvClockTask(void *pvParameters)
 {
-    TickType_t xNext         = xTaskGetTickCount();
-    uint8_t    tick          = 1u;
-    uint8_t    rp_wdt_timer  = 0u;
-    uint8_t    rp_wdt_grace  = RP_WDT_GRACE_S;
-    uint8_t    blink_counter = 0u;
-    uint8_t    last_cmd_seq  = 0u;   /* track CMD_SEQ written to RP */
+    TickType_t xNext          = xTaskGetTickCount();
+    uint8_t    tick           = 1u;
+    uint8_t    rp_wdt_timer   = 0u;    /* counts missed periods; resets on good period */
+    uint8_t    rp_wdt_grace   = RP_WDT_GRACE_S;
+    uint8_t    wdt_period_ctr = 0u;    /* CLK ticks within current heartbeat period */
+    uint8_t    rp_period_ok   = 0u;    /* cached result from last period assessment */
+    uint8_t    blink_counter  = 0u;
+    uint8_t    last_cmd_seq   = 0u;    /* track CMD_SEQ written to RP */
     (void)pvParameters;
 
     /* Convenience macro: write one register to RP then yield briefly so
@@ -243,114 +296,86 @@ static void prvClockTask(void *pvParameters)
          * Skipping I2C writes when RP is non-responsive prevents multi-second
          * stalls that would starve the Rx task and trigger TPS3435 co-reset.
          * ---------------------------------------------------------------- */
-        uint8_t rp_i2c_ok = 0u;
+        uint8_t rp_i2c_ok     = 0u;
+        uint8_t wdt_miss_lines = 0u;   /* missing WDT lines this period (0, 1, or 2) */
 
         if (rp_wdt_grace > 0u)
         {
             --rp_wdt_grace;
             if (rp_wdt_grace == 0u)
             {
-                /* Grace just expired — flush stale edge latches so only fresh
-                 * pulses count toward the next timeout window. */
-                P3IFG &= (uint8_t)~(BIT1 | BIT7);
+                /* Grace expired — flush IFG and reset period counter for clean start */
+                P3IFG        &= (uint8_t)~(BIT1 | BIT7);
+                wdt_period_ctr = 0u;
             }
-            /* RP is rebooting — skip I2C this tick */
+            /* RP rebooting — hold rp_i2c_ok=0; rp_period_ok already 0 */
         }
         else
         {
-            uint8_t rp_ifg = P3IFG & (BIT1 | BIT7);
-            if ((rp_ifg & BIT1) && (rp_ifg & BIT7))
+            /* Use cached result from last period for all ticks between assessments */
+            rp_i2c_ok = rp_period_ok;
+
+            /* Assess lines once per heartbeat period */
+            if (++wdt_period_ctr >= g_wdt_period_s)
             {
-                P3IFG        &= (uint8_t)~(BIT1 | BIT7);
-                rp_wdt_timer  = 0u;
-                rp_i2c_ok     = 1u;
-            }
-            else
-            {
-                ++rp_wdt_timer;
-                if (rp_wdt_timer >= RP_WDT_TIMEOUT_S)
+                wdt_period_ctr = 0u;
+
+                uint8_t rp_ifg   = P3IFG & (BIT1 | BIT7);
+                P3IFG           &= (uint8_t)~(BIT1 | BIT7);   /* clear for next period */
+                uint8_t line1_ok = (rp_ifg & BIT1) != 0u;
+                uint8_t line2_ok = (rp_ifg & BIT7) != 0u;
+
+                if (line1_ok && line2_ok)
                 {
                     rp_wdt_timer = 0u;
-                    ++g_rp_reset_count;
-                    GPIO_setOutputLowOnPin(RESET_RP_PORT, RESET_RP_PIN);
-                    vTaskDelay(pdMS_TO_TICKS(5u));
-                    GPIO_setOutputHighOnPin(RESET_RP_PORT, RESET_RP_PIN);
-                    supervisor_i2c_recover();
-                    rp_wdt_grace = RP_WDT_GRACE_S;
-                    /* rp_i2c_ok stays 0 — skip writes this tick */
+                    rp_period_ok = 1u;
+                    rp_i2c_ok    = 1u;
                 }
                 else
                 {
-                    /* Timer counting but not expired — RP likely still alive */
-                    rp_i2c_ok = 1u;
+                    /* Count each absent line as a separate fault event */
+                    if (!line1_ok) ++wdt_miss_lines;
+                    if (!line2_ok) ++wdt_miss_lines;
+
+                    /* Timeout expressed in periods: RP_WDT_TIMEOUT_S / period_s */
+                    uint8_t timeout_periods = (g_wdt_period_s > 0u)
+                                              ? (uint8_t)(RP_WDT_TIMEOUT_S / g_wdt_period_s)
+                                              : (uint8_t)RP_WDT_TIMEOUT_S;
+                    if (timeout_periods == 0u) timeout_periods = 1u;
+
+                    ++rp_wdt_timer;
+                    if (rp_wdt_timer >= timeout_periods)
+                    {
+                        rp_wdt_timer = 0u;
+                        ++g_rp_reset_count;
+                        GPIO_setOutputLowOnPin(RESET_RP_PORT, RESET_RP_PIN);
+                        vTaskDelay(pdMS_TO_TICKS(5u));
+                        GPIO_setOutputHighOnPin(RESET_RP_PORT, RESET_RP_PIN);
+                        supervisor_i2c_recover();
+                        rp_wdt_grace = RP_WDT_GRACE_S;
+                        rp_period_ok = 0u;
+                        rp_i2c_ok    = 0u;
+                    }
+                    else
+                    {
+                        /* Missed period but timer not expired — RP likely still alive */
+                        rp_period_ok = 1u;
+                        rp_i2c_ok    = 1u;
+                    }
                 }
             }
         }
 
-        /* ---- Signal Rx task: trigger blink every BLINK_INTERVAL_S seconds */
-        if (++blink_counter >= BLINK_INTERVAL_S)
-        {
-            blink_counter       = 0u;
-            g_blink_rp_state    = g_rp_reg_snapshot.rp_state;
-            g_blink_rapid       = (rp_wdt_grace > 0u) ? 1u : 0u;
-            g_blink_pending     = 1u;
-        }
-
-        /* ---- Build MSP status bytes ---------------------------------------- */
-        uint8_t wdt_ok  = ((P2OUT & BIT2) && (P3OUT & BIT4)) ? 1u : 0u;
-        uint8_t rail_ok = (g_rega_en && g_efusea_en) ? 1u : 0u;
-        uint8_t batt_ok = g_ina_ok;
-
-        uint8_t s0 = (uint8_t)(
-              (MODE_STARTUP & STATUS0_MODE_MASK)
-            | (wdt_ok  ? STATUS0_WDT_OK  : 0u)
-            | (batt_ok ? STATUS0_BATT_OK : 0u)
-            | (rail_ok ? STATUS0_RAIL_OK : 0u));
-
-        uint8_t s1 = (uint8_t)(g_ina_ok ? 0u : STATUS1_OC_MCU);
-
-        uint8_t mode_byte = MODE_STARTUP;   /* SM not implemented yet */
-
-        /* ---- I2C writes to RP (only when RP is known responsive) ----------- */
+        /* ---- I2C reads from RP (before fault/mode evaluation) ------------- */
         if (rp_i2c_ok)
         {
-            /* --- MSP status --- */
-            RP_WRITE(REG_MSP_STATUS0,     &s0,        1u);
-            RP_WRITE(REG_MSP_STATUS1,     &s1,        1u);
+            uint8_t rd[9];   /* sized for header read 0x00–0x08 */
 
-            /* --- Contact ack stub (all zeros — no radio on dev board) --- */
-            static const uint8_t ack_stub[6] = { 0u, 0u, 0u, 0u, 0u, 0u };
-            RP_WRITE(REG_CONTACT_ACK_SEQ, ack_stub,   6u);
-
-            /* --- Mode command (STARTUP; no state machine yet) --- */
-            RP_WRITE(REG_MODE_CMD,        &mode_byte, 1u);
-
-            /* Increment CMD_SEQ so RP can ACK (monotonic, wraps at 255) */
-            ++last_cmd_seq;
-            RP_WRITE(REG_CMD_SEQ,         &last_cmd_seq, 1u);
-
-            /* --- Telemetry --- */
-            RP_WRITE(REG_TLM_MODE,        &mode_byte, 1u);
-            RP_WRITE(REG_TLM_MSP_STATUS0, &s0,        1u);
-            RP_WRITE(REG_TLM_MSP_STATUS1, &s1,        1u);
-
-            if (g_ina_ok)
-            {
-                uint16_t v_mv = g_ina_data.bus_mv;
-                int16_t  i_ma = g_ina_data.current_ma;
-                RP_WRITE(REG_TLM_VBATT_MV, (const uint8_t *)&v_mv, 2u);
-                RP_WRITE(REG_TLM_IBATT_MA, (const uint8_t *)&i_ma, 2u);
-            }
-
-            /* TLM_TBATT_CC — no sensor on dev board, leave as zero */
-
-            /* ---- I2C reads from RP ---------------------------------------- */
-            uint8_t rd[8];
-
-            /* Header magic — check every 4 s */
+            /* Header magic + WDT period — check every 4 s */
             if ((g_current_second & 0x03u) == 0u)
             {
-                if (prv_rp_read(REG_MAGIC0, rd, 5u) == I2C_OK)
+                /* Read 9 bytes: 0x00–0x08 covers magic, version, and WDT_PERIOD_S */
+                if (prv_rp_read(REG_MAGIC0, rd, 9u) == I2C_OK)
                 {
                     memcpy(g_rp_reg_snapshot.hdr_magic, rd, 4u);
                     g_rp_reg_snapshot.hdr_version = rd[4];
@@ -359,20 +384,23 @@ static void prvClockTask(void *pvParameters)
                          rd[1] == HDR_MAGIC1_VAL &&
                          rd[2] == HDR_MAGIC2_VAL &&
                          rd[3] == HDR_MAGIC3_VAL) ? 1u : 0u;
+                    /* rd[8] = REG_WDT_PERIOD_S (offset 0x08 - 0x00) */
+                    if (rd[8] >= 1u && rd[8] <= 10u)
+                        g_wdt_period_s = rd[8];
                 }
             }
 
             /* RP state/health block (0x10–0x17) — every second */
             if (prv_rp_read(REG_RP_STATE, rd, 8u) == I2C_OK)
             {
-                g_rp_reg_snapshot.rp_state       = rd[0];
-                g_rp_reg_snapshot.rp_uptime_s    = (uint32_t)rd[1]
-                                                  | ((uint32_t)rd[2] << 8)
-                                                  | ((uint32_t)rd[3] << 16)
-                                                  | ((uint32_t)rd[4] << 24);
-                g_rp_reg_snapshot.rp_hb_counter  = (uint16_t)rd[5]
-                                                  | ((uint16_t)rd[6] << 8);
-                g_rp_reg_snapshot.rp_last_error  = rd[7];
+                g_rp_reg_snapshot.rp_state      = rd[0];
+                g_rp_reg_snapshot.rp_uptime_s   = (uint32_t)rd[1]
+                                                 | ((uint32_t)rd[2] << 8)
+                                                 | ((uint32_t)rd[3] << 16)
+                                                 | ((uint32_t)rd[4] << 24);
+                g_rp_reg_snapshot.rp_hb_counter = (uint16_t)rd[5]
+                                                 | ((uint16_t)rd[6] << 8);
+                g_rp_reg_snapshot.rp_last_error = rd[7];
             }
 
             /* RP request flags (0x30–0x33) — every second */
@@ -390,10 +418,81 @@ static void prvClockTask(void *pvParameters)
                     g_rp_reg_snapshot.fault_bitmap = (uint16_t)rd[0]
                                                    | ((uint16_t)rd[1] << 8);
                     g_rp_reg_snapshot.fault_seq    = rd[2];
-                    /* rd[3] = LATCH_FLAGS, rd[4] = reserved, rd[5] = CNT_I2C_ERR */
+                    /* rd[3]=LATCH_FLAGS  rd[4]=reserved  rd[5]=CNT_I2C_ERR */
                     g_rp_reg_snapshot.cnt_i2c_err  = rd[5];
                 }
             }
+
+            /* POST gate: set once RP header verified and INA is responding */
+            if (!g_post_passed && g_rp_reg_snapshot.hdr_ok && g_ina_ok)
+                g_post_passed = 1u;
+        }
+
+        /* ---- Fault and mode state machine ---------------------------------- */
+        /* Capture INA snapshot atomically for this tick */
+        int16_t  tick_ma    = g_ina_data.current_ma;
+        uint16_t tick_mv    = g_ina_data.bus_mv;
+        uint8_t  tick_ina   = g_ina_ok;
+
+        prvFaultUpdate(rp_i2c_ok, wdt_miss_lines, tick_ma, tick_mv, tick_ina);
+        prvModeUpdate(rp_wdt_grace, g_rp_reg_snapshot.rp_state);
+
+        /* ---- Signal Rx task: trigger blink every BLINK_INTERVAL_S seconds */
+        if (++blink_counter >= BLINK_INTERVAL_S)
+        {
+            blink_counter    = 0u;
+            g_blink_rp_state = g_rp_reg_snapshot.rp_state;
+            g_blink_rapid    = (rp_wdt_grace > 0u) ? 1u : 0u;
+            g_blink_pending  = 1u;
+        }
+
+        /* ---- Build MSP status bytes ---------------------------------------- */
+        uint8_t wdt_ok  = ((P2OUT & BIT2) && (P3OUT & BIT4)) ? 1u : 0u;
+        uint8_t rail_ok = (g_rega_en && g_efusea_en) ? 1u : 0u;
+        uint8_t batt_ok = tick_ina;
+
+        uint8_t s0 = (uint8_t)(
+              (g_msp_mode & STATUS0_MODE_MASK)
+            | (wdt_ok  ? STATUS0_WDT_OK  : 0u)
+            | (batt_ok ? STATUS0_BATT_OK : 0u)
+            | (rail_ok ? STATUS0_RAIL_OK : 0u));
+
+        uint8_t s1 = (uint8_t)(
+              (g_fault.oc_latched ? STATUS1_OC_MCU  : 0u)
+            | (g_fault.uv_load    ? STATUS1_UV_LOAD : 0u));
+
+        uint8_t mode_byte = g_msp_mode;
+
+        /* ---- I2C writes to RP (only when RP is known responsive) ----------- */
+        if (rp_i2c_ok)
+        {
+            /* --- MSP status --- */
+            RP_WRITE(REG_MSP_STATUS0,     &s0,        1u);
+            RP_WRITE(REG_MSP_STATUS1,     &s1,        1u);
+
+            /* --- Contact ack stub (all zeros — no radio on dev board) --- */
+            static const uint8_t ack_stub[6] = { 0u, 0u, 0u, 0u, 0u, 0u };
+            RP_WRITE(REG_CONTACT_ACK_SEQ, ack_stub,   6u);
+
+            /* --- Mode command --- */
+            RP_WRITE(REG_MODE_CMD,        &mode_byte, 1u);
+
+            /* Increment CMD_SEQ so RP can ACK (monotonic, wraps at 255) */
+            ++last_cmd_seq;
+            RP_WRITE(REG_CMD_SEQ,         &last_cmd_seq, 1u);
+
+            /* --- Telemetry --- */
+            RP_WRITE(REG_TLM_MODE,        &mode_byte, 1u);
+            RP_WRITE(REG_TLM_MSP_STATUS0, &s0,        1u);
+            RP_WRITE(REG_TLM_MSP_STATUS1, &s1,        1u);
+
+            if (tick_ina)
+            {
+                RP_WRITE(REG_TLM_VBATT_MV, (const uint8_t *)&tick_mv, 2u);
+                RP_WRITE(REG_TLM_IBATT_MA, (const uint8_t *)&tick_ma, 2u);
+            }
+
+            /* TLM_TBATT_CC — no sensor on dev board, leave as zero */
         }
 
         #undef RP_WRITE
@@ -421,14 +520,14 @@ static void prvRxTask(void *pvParameters)
         prvApplyRailEnables();
 
         /* Pulse WDT1 (P2.2) */
-        if (++wdt1_counter >= WDT_PULSE_PERIOD_S)
+        if (++wdt1_counter >= MSP_WDT_PERIOD_S)
         {
             wdt1_counter = 0u;
             prvPulseWdt1();
         }
 
         /* Pulse WDT2 (P3.4) */
-        if (++wdt2_counter >= WDT_PULSE_PERIOD_S)
+        if (++wdt2_counter >= MSP_WDT_PERIOD_S)
         {
             wdt2_counter = 0u;
             prvPulseWdt2();
@@ -511,6 +610,145 @@ static int8_t prv_rp_read(uint8_t reg, uint8_t *buf, uint8_t len)
 }
 
 /* ------------------------------------------------------------------
+ * Fault update — called once per CLK tick with fresh sensor data.
+ *
+ * WDT_RP_MISS  : wdt_miss_lines counts each absent WDT line this tick
+ *                (0, 1, or 2); accumulated into wdt_miss_count.  Decays
+ *                1 count per 60 s of healthy RP (rp_i2c_ok=1, no misses).
+ * OC_MCU       : latches after 3 consecutive samples >100 mA; decays
+ *                1 count per 30 s of healthy current; clears at 0.
+ * UV_LOAD      : set when bus_mv < 2900, cleared when bus_mv > 3000.
+ * EXT_TRIP     : sticky — set in main_blinky() from SYSRSTIV, not here.
+ * ------------------------------------------------------------------ */
+static void prvFaultUpdate(uint8_t rp_i2c_ok, uint8_t wdt_miss_lines,
+                           int16_t current_ma,
+                           uint16_t bus_mv, uint8_t ina_valid)
+{
+    /* --- WDT_RP_MISS ------------------------------------------------ */
+    if (wdt_miss_lines > 0u)
+    {
+        /* Accumulate per-line misses (clamped to 255) */
+        if (wdt_miss_lines < (uint8_t)(255u - g_fault.wdt_miss_count))
+            g_fault.wdt_miss_count += wdt_miss_lines;
+        else
+            g_fault.wdt_miss_count = 255u;
+        g_fault.wdt_miss_decay_ctr = 0u;   /* restart decay window on miss */
+    }
+    else if (rp_i2c_ok && (g_fault.wdt_miss_count > 0u))
+    {
+        if (++g_fault.wdt_miss_decay_ctr >= 60u)
+        {
+            g_fault.wdt_miss_decay_ctr = 0u;
+            --g_fault.wdt_miss_count;
+        }
+    }
+
+    /* --- OC_MCU ----------------------------------------------------- */
+    if (ina_valid)
+    {
+        if (current_ma > (int16_t)100)
+        {
+            if (!g_fault.oc_latched)
+            {
+                if (++g_fault.oc_consec >= 3u)
+                    g_fault.oc_latched = 1u;
+            }
+            g_fault.oc_decay_ctr = 0u;       /* reset decay while OC active */
+        }
+        else
+        {
+            if (!g_fault.oc_latched)
+            {
+                g_fault.oc_consec = 0u;       /* clear counter when healthy */
+            }
+            else
+            {
+                /* Latched — decay 1 count per 30 s of healthy current */
+                if (++g_fault.oc_decay_ctr >= 30u)
+                {
+                    g_fault.oc_decay_ctr = 0u;
+                    if (g_fault.oc_consec > 0u)
+                        --g_fault.oc_consec;
+                    if (g_fault.oc_consec == 0u)
+                        g_fault.oc_latched = 0u;
+                }
+            }
+        }
+    }
+
+    /* --- UV_LOAD ---------------------------------------------------- */
+    if (ina_valid)
+    {
+        if (!g_fault.uv_load && (bus_mv < 2900u))
+            g_fault.uv_load = 1u;
+        else if (g_fault.uv_load && (bus_mv > 3000u))
+            g_fault.uv_load = 0u;
+    }
+}
+
+/* ------------------------------------------------------------------
+ * Mode state machine — called once per CLK tick after prvFaultUpdate.
+ *
+ * STARTUP  → NOMINAL : POST passed + RP responding nominal + no faults
+ * NOMINAL  → SAFE    : wdt_miss_count >= 3  OR  oc_latched
+ * SAFE     → NOMINAL : all faults clear + RP responding nominal
+ * ANY      → SURVIVAL: uv_load active  (overrides all other transitions;
+ *                       power rails are NOT cut — MSP is always-on)
+ * SURVIVAL → SAFE    : uv_load cleared
+ *
+ * While g_post_passed == 0 (not yet verified), mode is forced to STARTUP
+ * regardless of persisted g_msp_mode value.
+ * ------------------------------------------------------------------ */
+static void prvModeUpdate(uint8_t rp_wdt_grace, uint8_t rp_state)
+{
+    uint8_t rp_ok       = (rp_wdt_grace == 0u) && (rp_state == RP_STATE_NOMINAL);
+    uint8_t faults_none = (g_fault.wdt_miss_count < 3u) && !g_fault.oc_latched;
+
+    /* POST gate — mode stays STARTUP until first successful verification */
+    if (!g_post_passed)
+    {
+        g_msp_mode = MODE_STARTUP;
+        return;
+    }
+
+    /* UV_LOAD: highest priority — push to SURVIVAL from any state */
+    if (g_fault.uv_load)
+    {
+        g_msp_mode = MODE_LOW_POWER;
+        return;
+    }
+
+    /* Leaving SURVIVAL: safe landing in SAFE (not directly NOMINAL) */
+    if (g_msp_mode == MODE_LOW_POWER)
+    {
+        g_msp_mode = MODE_SAFE;
+        return;
+    }
+
+    switch (g_msp_mode)
+    {
+        case MODE_STARTUP:
+            if (rp_ok && faults_none)
+                g_msp_mode = MODE_NOMINAL;
+            break;
+
+        case MODE_NOMINAL:
+            if (!faults_none)
+                g_msp_mode = MODE_SAFE;
+            break;
+
+        case MODE_SAFE:
+            if (faults_none && rp_ok)
+                g_msp_mode = MODE_NOMINAL;
+            break;
+
+        default:
+            g_msp_mode = MODE_STARTUP;
+            break;
+    }
+}
+
+/* ------------------------------------------------------------------
  * LED blink sequence
  *
  * Rapid mode (RP down):  BLINK_RAPID_COUNT fast pulses
@@ -518,7 +756,7 @@ static int8_t prv_rp_read(uint8_t reg, uint8_t *buf, uint8_t len)
  *                        then BLINK_GAP_MS dark pause
  *
  * Uses vTaskDelay — Rx task blocks during blink (~1 s max).
- * WDT_PULSE_PERIOD_S = 2 s so one missed tick is always safe.
+ * MSP_WDT_PERIOD_S = 2 s so one missed tick is always safe.
  * ------------------------------------------------------------------ */
 static void prvRunBlinkSequence(void)
 {
@@ -567,17 +805,19 @@ static inline void prvLedSet(uint8_t on)
  * ------------------------------------------------------------------ */
 static inline void prvApplyRailEnables(void)
 {
+    /* RegA + EfuseA: ALWAYS-ON rail powering the MSP — never cut by mode logic.
+     * Debugger override (g_rega_en / g_efusea_en) respected for bench testing. */
     if (g_rega_en)   GPIO_setOutputLowOnPin (REGA_EN_PORT,     REGA_EN_PIN);
     else             GPIO_setOutputHighOnPin(REGA_EN_PORT,     REGA_EN_PIN);
 
-    if (g_regb_en)   GPIO_setOutputLowOnPin (REGB_EN_PORT,     REGB_EN_PIN);
-    else             GPIO_setOutputHighOnPin(REGB_EN_PORT,     REGB_EN_PIN);
+    /* RegB: hardware removed — always off */
+    GPIO_setOutputHighOnPin(REGB_EN_PORT, REGB_EN_PIN);
 
     if (g_efusea_en) GPIO_setOutputLowOnPin (EFUSEA_SHDN_PORT, EFUSEA_SHDN_PIN);
     else             GPIO_setOutputHighOnPin(EFUSEA_SHDN_PORT, EFUSEA_SHDN_PIN);
 
-    if (g_efuseb_en) GPIO_setOutputLowOnPin (EFUSEB_SHDN_PORT, EFUSEB_SHDN_PIN);
-    else             GPIO_setOutputHighOnPin(EFUSEB_SHDN_PORT, EFUSEB_SHDN_PIN);
+    /* EfuseB: hardware removed — always off */
+    GPIO_setOutputHighOnPin(EFUSEB_SHDN_PORT, EFUSEB_SHDN_PIN);
 }
 
 /* ------------------------------------------------------------------
