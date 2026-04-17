@@ -22,7 +22,8 @@
 #define I2C_ERR_ARG      (-4)
 
 void   supervisor_i2c_init(void);
-void   supervisor_i2c_recover(void);   /* reset UCB0 to clear stuck-bus state */
+void   supervisor_i2c_recover(void);        /* reset UCB0 — call after RP reset          */
+void   supervisor_i2c_bus_recover(void);    /* Level-2: GPIO SCL pulse + STOP + re-init  */
 int8_t i2c_write_reg(uint8_t addr, uint8_t reg, const uint8_t *data, uint8_t len);
 int8_t i2c_read_reg (uint8_t addr, uint8_t reg, uint8_t *buf,        uint8_t len);
 

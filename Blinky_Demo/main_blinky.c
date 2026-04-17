@@ -144,10 +144,12 @@ typedef struct {
     uint16_t fault_bitmap;         /* REG_FAULT_BITMAP_L/H (0xF0–0xF1)       */
     uint8_t  fault_seq;            /* REG_FAULT_SEQ (0xF2)                   */
     uint8_t  cnt_i2c_err;          /* REG_CNT_I2C_ERR (0xF5)                 */
+    uint32_t last_hdr_ok_second;   /* g_current_second of last good header read */
+    uint8_t  i2c_bus_recover_count; /* cumulative Level-2 bus recovery attempts */
 } rp_reg_snapshot_t;
 
 #pragma PERSISTENT(g_rp_reg_snapshot)
-rp_reg_snapshot_t g_rp_reg_snapshot = { {0,0,0,0}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+rp_reg_snapshot_t g_rp_reg_snapshot = { {0,0,0,0}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0u, 0u };
 
 /* ------------------------------------------------------------------
  * Internal state
@@ -213,7 +215,8 @@ static inline void prvPulseWdt1(void);
 static inline void prvPulseWdt2(void);
 static inline void prvLedSet(uint8_t on);
 static void        prvRunBlinkSequence(void);
-static int8_t      prv_rp_read(uint8_t reg, uint8_t *buf, uint8_t len);
+static int8_t      prv_rp_read (uint8_t reg, uint8_t *buf,        uint8_t len);
+static int8_t      prv_rp_write(uint8_t reg, const uint8_t *data, uint8_t len);
 static void        prvFaultUpdate(uint8_t rp_i2c_ok, uint8_t wdt_miss_lines,
                                   int16_t current_ma,
                                   uint16_t bus_mv, uint8_t ina_valid);
@@ -278,11 +281,9 @@ static void prvClockTask(void *pvParameters)
     uint8_t    last_cmd_seq   = 0u;    /* track CMD_SEQ written to RP */
     (void)pvParameters;
 
-    /* Convenience macro: write one register to RP then yield briefly so
-     * CircuitPython can process it before the next transaction. */
+    /* Convenience macro: write one register to RP with Level-1 retry. */
     #define RP_WRITE(reg, ptr, len) \
-        (void)i2c_write_reg(RP_I2C_ADDR, (reg), (ptr), (len)); \
-        vTaskDelay(pdMS_TO_TICKS(10u))
+        (void)prv_rp_write((reg), (ptr), (len))
 
     /* prv_rp_read used in place of the old RP_READ macro so the return
      * value is usable in if() conditions. */
@@ -367,6 +368,11 @@ static void prvClockTask(void *pvParameters)
         }
 
         /* ---- I2C reads from RP (before fault/mode evaluation) ------------- */
+        /* i2c_consec_fail / i2c_recovery_att: Level-2/3 escalation counters.
+         * Not FRAM-persistent — reset each boot is intentional (fresh start). */
+        static uint8_t i2c_consec_fail  = 0u;
+        static uint8_t i2c_recovery_att = 0u;
+
         if (rp_i2c_ok)
         {
             uint8_t rd[9];   /* sized for header read 0x00–0x08 */
@@ -384,14 +390,18 @@ static void prvClockTask(void *pvParameters)
                          rd[1] == HDR_MAGIC1_VAL &&
                          rd[2] == HDR_MAGIC2_VAL &&
                          rd[3] == HDR_MAGIC3_VAL) ? 1u : 0u;
+                    if (g_rp_reg_snapshot.hdr_ok)
+                        g_rp_reg_snapshot.last_hdr_ok_second = g_current_second;
                     /* rd[8] = REG_WDT_PERIOD_S (offset 0x08 - 0x00) */
                     if (rd[8] >= 1u && rd[8] <= 10u)
                         g_wdt_period_s = rd[8];
                 }
             }
 
-            /* RP state/health block (0x10–0x17) — every second */
-            if (prv_rp_read(REG_RP_STATE, rd, 8u) == I2C_OK)
+            /* RP state/health block (0x10–0x17) — every second.
+             * This read is the primary I2C health indicator for the recovery ladder. */
+            uint8_t state_read_ok = (prv_rp_read(REG_RP_STATE, rd, 8u) == I2C_OK) ? 1u : 0u;
+            if (state_read_ok)
             {
                 g_rp_reg_snapshot.rp_state      = rd[0];
                 g_rp_reg_snapshot.rp_uptime_s   = (uint32_t)rd[1]
@@ -426,6 +436,53 @@ static void prvClockTask(void *pvParameters)
             /* POST gate: set once RP header verified and INA is responding */
             if (!g_post_passed && g_rp_reg_snapshot.hdr_ok && g_ina_ok)
                 g_post_passed = 1u;
+
+            /* ---- I2C recovery ladder (Levels 1–3) -------------------------
+             * Level 1: already handled inside prv_rp_read/prv_rp_write (3 retries).
+             * Level 2: bus recovery (GPIO SCL pulse + STOP) after 3 consecutive
+             *          failed state/health reads.
+             * Level 3: RP reset after 3 failed Level-2 attempts.
+             * ---------------------------------------------------------------- */
+            if (state_read_ok)
+            {
+                i2c_consec_fail  = 0u;
+                i2c_recovery_att = 0u;
+            }
+            else if (++i2c_consec_fail >= 3u)
+            {
+                i2c_consec_fail = 0u;
+                ++g_rp_reg_snapshot.i2c_bus_recover_count;
+                supervisor_i2c_bus_recover();
+                vTaskDelay(pdMS_TO_TICKS(50u));   /* settle after STOP */
+
+                /* Probe: see if recovery restored the link */
+                uint8_t probe[1];
+                if (prv_rp_read(REG_RP_STATE, probe, 1u) == I2C_OK)
+                {
+                    i2c_recovery_att = 0u;         /* Level 2 succeeded */
+                }
+                else if (++i2c_recovery_att >= 3u)
+                {
+                    i2c_recovery_att = 0u;
+                    /* Level 3: RP reset — only if:
+                     *  (a) GPIO heartbeat is present (rp_period_ok=1): RP is alive
+                     *      but I2C link is broken. A reset may clear a wedged slave.
+                     *      If heartbeat is gone the WDT miss path owns the reset.
+                     *  (b) Not already in grace period from a recent reset: avoid
+                     *      double-resetting before the RP has finished booting. */
+                    if (rp_period_ok && (rp_wdt_grace == 0u))
+                    {
+                        ++g_rp_reset_count;
+                        GPIO_setOutputLowOnPin(RESET_RP_PORT, RESET_RP_PIN);
+                        vTaskDelay(pdMS_TO_TICKS(5u));
+                        GPIO_setOutputHighOnPin(RESET_RP_PORT, RESET_RP_PIN);
+                        supervisor_i2c_recover();
+                        rp_wdt_grace = RP_WDT_GRACE_S;
+                        rp_period_ok = 0u;
+                        rp_i2c_ok    = 0u;
+                    }
+                }
+            }
         }
 
         /* ---- Fault and mode state machine ---------------------------------- */
@@ -493,6 +550,16 @@ static void prvClockTask(void *pvParameters)
             }
 
             /* TLM_TBATT_CC — no sensor on dev board, leave as zero */
+
+            /* TLM_UPTIME_S — mirror RP uptime from snapshot (already read above) */
+            RP_WRITE(REG_TLM_UPTIME_S, (const uint8_t *)&g_rp_reg_snapshot.rp_uptime_s, 4u);
+
+            /* TLM_CONTACT_AGE_S — stub: no ground contact implemented yet;
+             * use seconds-since-boot as proxy age (valid contact never seen) */
+            RP_WRITE(REG_TLM_CONTACT_AGE_S, (const uint8_t *)&g_current_second, 4u);
+
+            /* TLM_FAULT_BITMAP_RP — mirror RP fault bitmap from snapshot */
+            RP_WRITE(REG_TLM_FAULT_BITMAP_RP, (const uint8_t *)&g_rp_reg_snapshot.fault_bitmap, 2u);
         }
 
         #undef RP_WRITE
@@ -597,14 +664,33 @@ static void prvInaTask(void *pvParameters)
 }
 
 /* ------------------------------------------------------------------
- * RP I2C read helper — performs read then yields 10 ms so CircuitPython
- * can process the next transaction.  Returns the i2c_read_reg() result
- * so callers can use it in if() conditions (the old RP_READ macro could
- * not be used that way).
+ * RP I2C helpers — Level-1 retry (up to 3 attempts, 20 ms pause between).
+ * The 10 ms post-transaction yield gives CircuitPython time to process.
  * ------------------------------------------------------------------ */
 static int8_t prv_rp_read(uint8_t reg, uint8_t *buf, uint8_t len)
 {
-    int8_t rc = i2c_read_reg(RP_I2C_ADDR, reg, buf, (uint8_t)len);
+    uint8_t attempt;
+    int8_t  rc = I2C_ERR_TIMEOUT;
+    for (attempt = 0u; attempt < 3u; ++attempt)
+    {
+        rc = i2c_read_reg(RP_I2C_ADDR, reg, buf, len);
+        vTaskDelay(pdMS_TO_TICKS(10u));
+        if (rc == I2C_OK) return I2C_OK;
+        if (attempt < 2u) vTaskDelay(pdMS_TO_TICKS(20u));
+    }
+    return rc;
+}
+
+static int8_t prv_rp_write(uint8_t reg, const uint8_t *data, uint8_t len)
+{
+    /* Writes retry once only — reduces dead-bus timing slippage.
+     * A failed write is acceptable (RP gets data next cycle); reads
+     * are where 3-attempt retry matters for data integrity. */
+    int8_t rc = i2c_write_reg(RP_I2C_ADDR, reg, data, len);
+    vTaskDelay(pdMS_TO_TICKS(10u));
+    if (rc == I2C_OK) return I2C_OK;
+    vTaskDelay(pdMS_TO_TICKS(20u));
+    rc = i2c_write_reg(RP_I2C_ADDR, reg, data, len);
     vTaskDelay(pdMS_TO_TICKS(10u));
     return rc;
 }

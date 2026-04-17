@@ -118,10 +118,13 @@
 /* ------------------------------------------------------------------
  * Telemetry Snapshot  0x90–0xAF  (MSP_OWNED — MSP writes)
  * ------------------------------------------------------------------ */
+#define REG_TLM_UPTIME_S        (0x90u)   /* uint32 LE: RP uptime seconds (mirror of 0x11–0x14) */
+#define REG_TLM_CONTACT_AGE_S   (0x94u)   /* uint32 LE: MSP-authoritative age since last contact */
 #define REG_TLM_VBATT_MV        (0x98u)   /* uint16 LE, millivolts           */
 #define REG_TLM_IBATT_MA        (0x9Au)   /* int16  LE, milliamps            */
 #define REG_TLM_TBATT_CC        (0xA2u)   /* int16  LE, centi-°C (stub=0)   */
 #define REG_TLM_MODE            (0xA5u)   /* MSP operating mode enum         */
+#define REG_TLM_FAULT_BITMAP_RP (0xACu)   /* uint16 LE: mirror of RP fault bitmap (0xF0–0xF1)  */
 #define REG_TLM_MSP_STATUS0     (0xAEu)   /* mirror of REG_MSP_STATUS0       */
 #define REG_TLM_MSP_STATUS1     (0xAFu)   /* mirror of REG_MSP_STATUS1       */
 
@@ -136,6 +139,9 @@
 #define REG_CNT_CONTACT_TIMEOUT (0xFCu)   /* contact ack timeout counter     */
 #define REG_FAULT_CRC_L         (0xFEu)   /* CRC16 over 0xF0–0xFD LSB        */
 #define REG_FAULT_CRC_H         (0xFFu)   /* CRC16 over 0xF0–0xFD MSB        */
+
+/* RP fault bitmap bit definitions (REG_FAULT_BITMAP_L/H, 16-bit LE) */
+#define RP_FAULT_BIT_I2C_LINK_ERR  (1u << 0)  /* I2C link errors >= threshold */
 
 /* ------------------------------------------------------------------
  * STATUS0 bit fields  (shared between MSP_STATUS0 and RP status byte)

@@ -72,6 +72,64 @@ void supervisor_i2c_recover(void)
     EUSCI_B_I2C_enable(EUSCI_B0_BASE);
 }
 
+void supervisor_i2c_bus_recover(void)
+{
+    /* Level-2 I2C bus recovery (FDIR doc).
+     *
+     * Sequence:
+     *  1. Disable UCB0.
+     *  2. Switch P1.6 (SDA) and P1.7 (SCL) to GPIO open-drain output.
+     *  3. Pulse SCL 9 times to clock out any slave wedged mid-byte.
+     *  4. Generate a STOP condition to release any stuck master state.
+     *  5. Restore P1.6/P1.7 to UCB0 peripheral function.
+     *  6. Re-initialise UCB0.
+     *
+     * __delay_cycles(40) ≈ 5 µs at 8 MHz SMCLK — adequate for 400 kHz margins.
+     * Does NOT hold the I2C mutex (caller must not hold it).
+     */
+    uint8_t i;
+
+    EUSCI_B_I2C_disable(EUSCI_B0_BASE);
+
+    /* Switch to GPIO output — P1SEL0=0, P1SEL1=0 → GPIO */
+    P1SEL0 &= (uint8_t)~(BIT6 | BIT7);
+    P1SEL1 &= (uint8_t)~(BIT6 | BIT7);
+    P1DIR  |= (uint8_t)(BIT6 | BIT7);
+    P1OUT  |= (uint8_t)(BIT6 | BIT7);   /* idle: SDA high, SCL high */
+
+    /* 9 SCL pulses — sufficient to flush any single stuck byte */
+    for (i = 0u; i < 9u; i++)
+    {
+        P1OUT &= (uint8_t)~BIT7;         /* SCL low  */
+        __delay_cycles(40u);
+        P1OUT |= (uint8_t)BIT7;          /* SCL high */
+        __delay_cycles(40u);
+    }
+
+    /* STOP condition: SDA low → SCL high → SDA high */
+    P1OUT &= (uint8_t)~BIT6;             /* SDA low  */
+    __delay_cycles(40u);
+    P1OUT |= (uint8_t)BIT7;              /* SCL high (already, belt-and-braces) */
+    __delay_cycles(40u);
+    P1OUT |= (uint8_t)BIT6;              /* SDA high → STOP edge */
+    __delay_cycles(40u);
+
+    /* Restore UCB0 peripheral function on P1.6/P1.7 (P1SEL0=1) */
+    P1SEL0 |= (uint8_t)(BIT6 | BIT7);
+
+    /* Re-initialise UCB0 */
+    EUSCI_B_I2C_initMasterParam p = {
+        .selectClockSource    = EUSCI_B_I2C_CLOCKSOURCE_SMCLK,
+        .i2cClk               = 8000000UL,
+        .dataRate             = EUSCI_B_I2C_SET_DATA_RATE_400KBPS,
+        .byteCounterThreshold = 0u,
+        .autoSTOPGeneration   = EUSCI_B_I2C_NO_AUTO_STOP,
+    };
+    EUSCI_B_I2C_initMaster(EUSCI_B0_BASE, &p);
+    EUSCI_B_I2C_setTimeout(EUSCI_B0_BASE, EUSCI_B_I2C_TIMEOUT_31_MS);
+    EUSCI_B_I2C_enable(EUSCI_B0_BASE);
+}
+
 int8_t i2c_write_reg(uint8_t addr, uint8_t reg, const uint8_t *data, uint8_t len)
 {
     int8_t  rc = I2C_OK;
