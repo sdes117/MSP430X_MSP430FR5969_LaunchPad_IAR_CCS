@@ -368,11 +368,6 @@ static void prvClockTask(void *pvParameters)
         }
 
         /* ---- I2C reads from RP (before fault/mode evaluation) ------------- */
-        /* i2c_consec_fail / i2c_recovery_att: Level-2/3 escalation counters.
-         * Not FRAM-persistent — reset each boot is intentional (fresh start). */
-        static uint8_t i2c_consec_fail  = 0u;
-        static uint8_t i2c_recovery_att = 0u;
-
         if (rp_i2c_ok)
         {
             uint8_t rd[9];   /* sized for header read 0x00–0x08 */
@@ -436,53 +431,6 @@ static void prvClockTask(void *pvParameters)
             /* POST gate: set once RP header verified and INA is responding */
             if (!g_post_passed && g_rp_reg_snapshot.hdr_ok && g_ina_ok)
                 g_post_passed = 1u;
-
-            /* ---- I2C recovery ladder (Levels 1–3) -------------------------
-             * Level 1: already handled inside prv_rp_read/prv_rp_write (3 retries).
-             * Level 2: bus recovery (GPIO SCL pulse + STOP) after 3 consecutive
-             *          failed state/health reads.
-             * Level 3: RP reset after 3 failed Level-2 attempts.
-             * ---------------------------------------------------------------- */
-            if (state_read_ok)
-            {
-                i2c_consec_fail  = 0u;
-                i2c_recovery_att = 0u;
-            }
-            else if (++i2c_consec_fail >= 3u)
-            {
-                i2c_consec_fail = 0u;
-                ++g_rp_reg_snapshot.i2c_bus_recover_count;
-                supervisor_i2c_bus_recover();
-                vTaskDelay(pdMS_TO_TICKS(50u));   /* settle after STOP */
-
-                /* Probe: see if recovery restored the link */
-                uint8_t probe[1];
-                if (prv_rp_read(REG_RP_STATE, probe, 1u) == I2C_OK)
-                {
-                    i2c_recovery_att = 0u;         /* Level 2 succeeded */
-                }
-                else if (++i2c_recovery_att >= 3u)
-                {
-                    i2c_recovery_att = 0u;
-                    /* Level 3: RP reset — only if:
-                     *  (a) GPIO heartbeat is present (rp_period_ok=1): RP is alive
-                     *      but I2C link is broken. A reset may clear a wedged slave.
-                     *      If heartbeat is gone the WDT miss path owns the reset.
-                     *  (b) Not already in grace period from a recent reset: avoid
-                     *      double-resetting before the RP has finished booting. */
-                    if (rp_period_ok && (rp_wdt_grace == 0u))
-                    {
-                        ++g_rp_reset_count;
-                        GPIO_setOutputLowOnPin(RESET_RP_PORT, RESET_RP_PIN);
-                        vTaskDelay(pdMS_TO_TICKS(5u));
-                        GPIO_setOutputHighOnPin(RESET_RP_PORT, RESET_RP_PIN);
-                        supervisor_i2c_recover();
-                        rp_wdt_grace = RP_WDT_GRACE_S;
-                        rp_period_ok = 0u;
-                        rp_i2c_ok    = 0u;
-                    }
-                }
-            }
         }
 
         /* ---- Fault and mode state machine ---------------------------------- */
