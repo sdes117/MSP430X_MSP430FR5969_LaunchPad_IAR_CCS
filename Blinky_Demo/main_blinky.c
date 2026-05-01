@@ -271,14 +271,15 @@ void main_blinky(void)
  * ------------------------------------------------------------------ */
 static void prvClockTask(void *pvParameters)
 {
-    TickType_t xNext          = xTaskGetTickCount();
-    uint8_t    tick           = 1u;
-    uint8_t    rp_wdt_timer   = 0u;    /* counts missed periods; resets on good period */
-    uint8_t    rp_wdt_grace   = RP_WDT_GRACE_S;
-    uint8_t    wdt_period_ctr = 0u;    /* CLK ticks within current heartbeat period */
-    uint8_t    rp_period_ok   = 0u;    /* cached result from last period assessment */
-    uint8_t    blink_counter  = 0u;
-    uint8_t    last_cmd_seq   = 0u;    /* track CMD_SEQ written to RP */
+    TickType_t xNext            = xTaskGetTickCount();
+    uint8_t    tick             = 1u;
+    uint8_t    rp_wdt_timer     = 0u;    /* counts missed periods; resets on good period */
+    uint8_t    rp_wdt_grace     = RP_WDT_GRACE_S;
+    uint8_t    wdt_period_ctr   = 0u;    /* CLK ticks within current heartbeat period */
+    uint8_t    rp_period_ok     = 0u;    /* cached result from last period assessment */
+    uint8_t    blink_counter    = 0u;
+    uint8_t    last_cmd_seq     = 0u;    /* track CMD_SEQ written to RP */
+    uint8_t    i2c_fail_streak  = 0u;    /* consecutive seconds with failed state read */
     (void)pvParameters;
 
     /* Convenience macro: write one register to RP with Level-1 retry. */
@@ -406,6 +407,17 @@ static void prvClockTask(void *pvParameters)
                 g_rp_reg_snapshot.rp_hb_counter = (uint16_t)rd[5]
                                                  | ((uint16_t)rd[6] << 8);
                 g_rp_reg_snapshot.rp_last_error = rd[7];
+                i2c_fail_streak = 0u;
+            }
+            else
+            {
+                /* UCB0 may be stuck (isBusBusy=true from a previous STOP timeout).
+                 * Reinit UCB0 after 3 consecutive missed reads to unblock the bus. */
+                if (++i2c_fail_streak >= 1u)
+                {
+                    i2c_fail_streak = 0u;
+                    supervisor_i2c_recover();
+                }
             }
 
             /* RP request flags (0x30–0x33) — every second */
