@@ -84,7 +84,6 @@ static const ina219_t g_ina_3v3_msp = {
     .calib          = INA219_CALIB_3V3_MSP,
     .current_lsb_ua = INA219_LSB_UA_3V3_MSP,
 };
-
 /* ------------------------------------------------------------------
  * Rail enable/disable GPIO
  * ------------------------------------------------------------------ */
@@ -231,8 +230,7 @@ void main_blinky(void)
 
     if (boot_cause <= SYSRSTIV_DOBOR)
     {
-        if (boot_cause <= SYSRSTIV_RSTNMI)
-            g_current_second = 0u;
+        g_current_second = 0u;
     }
     ++g_boot_count;
 
@@ -413,7 +411,7 @@ static void prvClockTask(void *pvParameters)
             {
                 /* UCB0 may be stuck (isBusBusy=true from a previous STOP timeout).
                  * Reinit UCB0 after 3 consecutive missed reads to unblock the bus. */
-                if (++i2c_fail_streak >= 1u)
+                if (++i2c_fail_streak >= 3u)
                 {
                     i2c_fail_streak = 0u;
                     supervisor_i2c_recover();
