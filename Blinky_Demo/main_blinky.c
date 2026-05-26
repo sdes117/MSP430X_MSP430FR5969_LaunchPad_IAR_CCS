@@ -352,6 +352,9 @@ static void prvClockTask(void *pvParameters)
                         vTaskDelay(pdMS_TO_TICKS(5u));
                         GPIO_setOutputHighOnPin(RESET_RP_PORT, RESET_RP_PIN);
                         supervisor_i2c_recover();
+                        /* MSP initiated this reset — give the RP a clean WDT slate */
+                        g_fault.wdt_miss_count     = 0u;
+                        g_fault.wdt_miss_decay_ctr = 0u;
                         rp_wdt_grace = RP_WDT_GRACE_S;
                         rp_period_ok = 0u;
                         rp_i2c_ok    = 0u;
@@ -472,9 +475,11 @@ static void prvClockTask(void *pvParameters)
             | (batt_ok ? STATUS0_BATT_OK : 0u)
             | (rail_ok ? STATUS0_RAIL_OK : 0u));
 
+        uint8_t miss_clamped = (g_fault.wdt_miss_count > 63u) ? 63u : g_fault.wdt_miss_count;
         uint8_t s1 = (uint8_t)(
               (g_fault.oc_latched ? STATUS1_OC_MCU  : 0u)
-            | (g_fault.uv_load    ? STATUS1_UV_LOAD : 0u));
+            | (g_fault.uv_load    ? STATUS1_UV_LOAD : 0u)
+            | (uint8_t)(miss_clamped << STATUS1_WDT_MISS_SHIFT));
 
         uint8_t mode_byte = g_msp_mode;
 
@@ -658,7 +663,7 @@ static int8_t prv_rp_write(uint8_t reg, const uint8_t *data, uint8_t len)
  *
  * WDT_RP_MISS  : wdt_miss_lines counts each absent WDT line this tick
  *                (0, 1, or 2); accumulated into wdt_miss_count.  Decays
- *                1 count per 60 s of healthy RP (rp_i2c_ok=1, no misses).
+ *                1 count per 10 s of healthy RP (rp_i2c_ok=1, no misses).
  * OC_MCU       : latches after 3 consecutive samples >100 mA; decays
  *                1 count per 30 s of healthy current; clears at 0.
  * UV_LOAD      : set when bus_mv < 2900, cleared when bus_mv > 3000.
@@ -680,7 +685,7 @@ static void prvFaultUpdate(uint8_t rp_i2c_ok, uint8_t wdt_miss_lines,
     }
     else if (rp_i2c_ok && (g_fault.wdt_miss_count > 0u))
     {
-        if (++g_fault.wdt_miss_decay_ctr >= 60u)
+        if (++g_fault.wdt_miss_decay_ctr >= 10u)
         {
             g_fault.wdt_miss_decay_ctr = 0u;
             --g_fault.wdt_miss_count;

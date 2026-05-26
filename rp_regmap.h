@@ -157,6 +157,7 @@
  * ------------------------------------------------------------------ */
 #define STATUS1_OC_MCU          (1u << 0)   /* eFuse OC on 3V3 MSP rail      */
 #define STATUS1_UV_LOAD         (1u << 1)   /* regulator PG lost             */
+#define STATUS1_WDT_MISS_SHIFT  (2u)        /* bits [7:2] = wdt_miss_count (0–63) */
 
 /* ------------------------------------------------------------------
  * MSP fault bitmap bit fields (MSP-local; reflected in STATUS1 and
